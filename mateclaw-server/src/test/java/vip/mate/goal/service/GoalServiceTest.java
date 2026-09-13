@@ -315,6 +315,85 @@ class GoalServiceTest {
         assertTrue(setsProperty(update.getValue(), "persistentExecution"), update.getValue().getSqlSet());
     }
 
+    private GoalEvaluationResult completedEvaluation() {
+        return new GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(), null);
+    }
+
+    @Test
+    void automaticCompletionCannotForcePassNewCriteria() {
+        GoalEntity goal = verifiedPersistentGoal(GoalStatus.ACTIVE);
+        goal.setPersistentExecution(false);
+        goal.setCriteria("[{\"id\":\"C1\",\"text\":\"new requirement\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(goal);
+        lenient().when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        assertEquals(409, assertThrows(MateClawException.class,
+                () -> service.markEvaluatedCompleted(1L, completedEvaluation())).getCode());
+        verify(goalMapper, never()).update(any(), any(LambdaUpdateWrapper.class));
+    }
+
+    @Test
+    void automaticCompletionRechecksCurrentCriteriaAfterCasMiss() {
+        GoalEntity old = verifiedPersistentGoal(GoalStatus.ACTIVE);
+        old.setPersistentExecution(false);
+        GoalEntity fresh = verifiedPersistentGoal(GoalStatus.ACTIVE);
+        fresh.setPersistentExecution(false);
+        fresh.setVersion(1);
+        fresh.setCriteria("[{\"id\":\"C1\",\"text\":\"new requirement\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(old, fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0);
+        assertEquals(409, assertThrows(MateClawException.class,
+                () -> service.markEvaluatedCompleted(1L, completedEvaluation())).getCode());
+        verify(goalMapper, times(1)).update(any(), any(LambdaUpdateWrapper.class));
+    }
+
+    @Test
+    void automaticCompletionCannotOverridePauseOrAbandonment() {
+        for (GoalStatus status : java.util.List.of(GoalStatus.PAUSED, GoalStatus.ABANDONED)) {
+            GoalEntity goal = verifiedPersistentGoal(status);
+            goal.setPersistentExecution(false);
+            when(goalMapper.selectById(1L)).thenReturn(goal);
+            assertEquals(409, assertThrows(MateClawException.class,
+                    () -> service.markEvaluatedCompleted(1L, completedEvaluation())).getCode());
+        }
+        verify(goalMapper, never()).update(any(), any(LambdaUpdateWrapper.class));
+        verify(eventMapper, never()).insert(any(GoalEventEntity.class));
+    }
+
+    @Test
+    void automaticCompletionPreservesCurrentChecklist() {
+        GoalEntity goal = verifiedPersistentGoal(GoalStatus.ACTIVE);
+        goal.setPersistentExecution(false);
+        when(goalMapper.selectById(1L)).thenReturn(goal, statusFlipped(goal, GoalStatus.COMPLETED));
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        assertEquals(GoalStatus.COMPLETED, service.markEvaluatedCompleted(1L, completedEvaluation()).getStatus());
+        ArgumentCaptor<LambdaUpdateWrapper> update = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper).update(any(), update.capture());
+        assertFalse(update.getValue().getSqlSet().contains("criteria="));
+    }
+
+    @Test
+    void automaticCompletionRejectsMissingOrFallbackEvaluation() {
+        assertEquals(409, assertThrows(MateClawException.class,
+                () -> service.markEvaluatedCompleted(1L, null)).getCode());
+        assertEquals(409, assertThrows(MateClawException.class,
+                () -> service.markEvaluatedCompleted(1L, GoalEvaluationResult.fallback("unavailable"))).getCode());
+        verify(goalMapper, never()).update(any(), any(LambdaUpdateWrapper.class));
+    }
+
+    @Test
+    void explicitLegacyCompletionRetainsItsSeparateCompatibilityPath() {
+        GoalEntity goal = persisted(1L, GoalStatus.ACTIVE);
+        goal.setPersistentExecution(false);
+        goal.setCriteria("[{\"id\":\"C1\",\"text\":\"manual check\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(goal, statusFlipped(goal, GoalStatus.COMPLETED));
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        assertEquals(GoalStatus.COMPLETED, service.markCompleted(1L, completedEvaluation()).getStatus());
+        ArgumentCaptor<LambdaUpdateWrapper> update = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper).update(any(), update.capture());
+        assertTrue(update.getValue().getSqlSet().contains("criteria="));
+    }
+
     @Test
     void persistentCompletionRequiresFreshPassedCriteriaWithEvidence() {
         GoalEntity goal = persisted(1L, GoalStatus.ACTIVE);

@@ -215,6 +215,22 @@ class GoalEvaluationNodeContinuationTest {
         assertInstanceOf(Map.class, ((List<?>) criteria).get(0));
     }
 
+    @Test
+    void automaticCompletionUsesCurrentStateGuardAndDoesNotEmitSuccessOnConflict() throws Exception {
+        Fixture f = new Fixture();
+        var completed = new GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0, List.of(), null);
+        when(f.evaluationService.evaluate(any(), anyList(), anyString())).thenReturn(completed);
+        when(f.goalService.markEvaluatedCompleted(eq(1L), eq(completed)))
+                .thenThrow(new vip.mate.exception.MateClawException(409, "current criteria changed"));
+        var out = f.node().apply(f.state(FinishReason.NORMAL.getValue(), 0, 0));
+        verify(f.goalService).markEvaluatedCompleted(1L, completed);
+        verify(f.goalService, never()).markCompleted(any(), any());
+        @SuppressWarnings("unchecked")
+        var events = (List<GraphEventPublisher.GraphEvent>) out.get(MateClawStateKeys.PENDING_EVENTS);
+        assertTrue(events.stream().noneMatch(event -> "goal_completed".equals(event.type())));
+        assertEquals(Boolean.TRUE, out.get(MateClawStateKeys.GOAL_EVALUATED_THIS_RUN));
+    }
+
     // ===== Test fixture =====
 
     private static final class Fixture {

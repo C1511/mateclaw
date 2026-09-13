@@ -59,6 +59,9 @@ public interface GoalService {
     /** Flip active->completed. Writes a 'completed' event. */
     GoalEntity markCompleted(Long id, GoalEvaluationResult result);
 
+    /** Complete an evaluator result only if the current active checklist still passes with evidence. */
+    GoalEntity markEvaluatedCompleted(Long id, GoalEvaluationResult result);
+
     /** Flip active->exhausted with the reason that triggered it. */
     GoalEntity markExhausted(Long id, String reason);
 

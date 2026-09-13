@@ -202,7 +202,7 @@ public class GoalEvaluationNode implements NodeAction {
             // Completion is the deterministic "all criteria passed" signal the
             // evaluator already folded into result.completed() — no score gate.
             if (result.completed()) {
-                GoalEntity completed = goalService.markCompleted(refreshed.getId(), result);
+                GoalEntity completed = goalService.markEvaluatedCompleted(refreshed.getId(), result);
                 return MateClawStateAccessor.output()
                         .goalEvaluationResult(result.toMap())
                         .goalEvaluatedThisRun(true)

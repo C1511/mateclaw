@@ -340,15 +340,37 @@ public class GoalServiceImpl implements GoalService {
     @Override
     @Transactional
     public GoalEntity markCompleted(Long id, GoalEvaluationResult result) {
+        return completeGoal(id, result, false);
+    }
+
+    @Override
+    @Transactional
+    public GoalEntity markEvaluatedCompleted(Long id, GoalEvaluationResult result) {
+        if (result == null || !result.completed()
+                || !GoalEvaluationResult.DECISION_COMPLETED.equals(result.decision())) {
+            throw new MateClawException("err.goal.completion_not_verified", 409,
+                    "Automatic completion requires a completed evaluation");
+        }
+        return completeGoal(id, result, true);
+    }
+
+    private GoalEntity completeGoal(Long id, GoalEvaluationResult result, boolean evaluated) {
         GoalEntity g = retryOptimistic(id, "markCompleted", fresh -> {
-            if (fresh.getStatus().isTerminal()) return null; // idempotent
+            if (fresh.getStatus().isTerminal()) {
+                if (evaluated && fresh.getStatus() != GoalStatus.COMPLETED) {
+                    throw new MateClawException("err.goal.completion_not_verified", 409,
+                            "Automatic completion cannot replace another terminal state");
+                }
+                return null; // idempotent
+            }
             boolean persistent = Boolean.TRUE.equals(fresh.getPersistentExecution());
             List<GoalCriterion> existing = GoalCriteriaCodec.parse(fresh.getCriteria(), objectMapper);
-            if (persistent && (fresh.getStatus() != GoalStatus.ACTIVE || existing.isEmpty()
-                    || existing.stream().anyMatch(c -> c == null || !c.passed()
-                            || c.evidence() == null || c.evidence().isBlank()))) {
+            // Rechecked against the fresh row on every CAS retry. A stale
+            // evaluator result must never force-pass newly added criteria.
+            if ((persistent || evaluated) && (fresh.getStatus() != GoalStatus.ACTIVE
+                    || !GoalCriteriaCodec.allPassed(existing))) {
                 throw new MateClawException("err.goal.completion_not_verified", 409,
-                        "Persistent completion requires an active goal and evidence for every current criterion");
+                        "Completion requires an active goal and evidence for every current criterion");
             }
             LambdaUpdateWrapper<GoalEntity> w = baseLockedUpdate(fresh)
                     .set(GoalEntity::getStatus, GoalStatus.COMPLETED);
@@ -356,9 +378,9 @@ public class GoalServiceImpl implements GoalService {
                 w.set(GoalEntity::getCompletionScore, result.score())
                  .set(GoalEntity::getProgressSummary, result.gap());
             }
-            // Preserve verified persistent evidence verbatim. Legacy manual
+            // Preserve automatically evaluated and persistent evidence verbatim. Legacy manual
             // completion retains its historical force-passed checklist snapshot.
-            if (!persistent && !existing.isEmpty()) {
+            if (!persistent && !evaluated && !existing.isEmpty()) {
                 List<GoalCriterion> allPassed = existing.stream()
                         .map(c -> c.passed() ? c : new GoalCriterion(c.id(), c.text(), true,
                                 c.evidence() == null || c.evidence().isBlank()
