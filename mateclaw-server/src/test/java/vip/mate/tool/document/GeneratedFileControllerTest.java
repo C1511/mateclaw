@@ -2,6 +2,8 @@ package vip.mate.tool.document;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -12,7 +14,7 @@ import vip.mate.workspace.core.service.WorkspaceService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -51,6 +53,33 @@ class GeneratedFileControllerTest {
                 new TestingAuthenticationToken("alice", "pw"));
 
         assertEquals(200, response.getStatusCode().value());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"image/svg+xml,inline", "text/html,inline", "image/png,inline", "text/plain,attachment"})
+    void generatedContentHasSandboxPolicyWithoutChangingBytesOrDisposition(String mime, String disposition,
+                                                                          @TempDir Path dir) {
+        GeneratedFileCache cache = new GeneratedFileCache(dir);
+        byte[] payload = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>window.generatedScriptRan=true</script></svg>"
+                .getBytes(StandardCharsets.UTF_8);
+        String id = cache.put(payload, "report", mime, new GeneratedFileCache.Owner(20L, 30L, "conv"));
+        AuthService authService = mock(AuthService.class);
+        WorkspaceService workspaceService = mock(WorkspaceService.class);
+        when(authService.findByUsername("alice")).thenReturn(user(30L, "user"));
+        when(workspaceService.hasPermissionCached(20L, 30L, "viewer")).thenReturn(true);
+        var response = new GeneratedFileController(cache, authService, workspaceService)
+                .download(id, 20L, new TestingAuthenticationToken("alice", "pw"));
+        assertEquals(200, response.getStatusCode().value());
+        assertArrayEquals(payload, (byte[]) response.getBody());
+        assertTrue(response.getHeaders().getFirst("Content-Disposition").startsWith(disposition + ";"));
+        assertEquals("nosniff", response.getHeaders().getFirst("X-Content-Type-Options"));
+        String policy = response.getHeaders().getFirst("Content-Security-Policy");
+        assertNotNull(policy);
+        assertTrue(policy.contains("sandbox allow-downloads;"));
+        assertTrue(policy.contains("default-src 'none';"));
+        assertTrue(policy.contains("form-action 'none'"));
+        assertFalse(policy.contains("allow-scripts"));
+        assertFalse(policy.contains("allow-same-origin"));
     }
 
     private static UserEntity user(Long id, String role) {

@@ -60,16 +60,14 @@ public class GeneratedFileController {
                     boolean isImage = mime != null && mime.startsWith("image/");
                     boolean isHtml = mime != null && mime.toLowerCase().startsWith("text/html");
                     String disposition = (isImage || isHtml) ? "inline" : "attachment";
-                    if (isHtml) {
-                        // The bytes are model/tool-generated HTML served from the app's
-                        // own origin. A strict CSP neutralises XSS: scripts, plugins and
-                        // framing are forbidden, only inline styles + images/fonts load.
-                        // This makes an on-demand "open the article" preview safe.
-                        headers.add("Content-Security-Policy",
-                                "default-src 'none'; img-src * data:; style-src 'unsafe-inline'; "
-                                        + "font-src * data:; media-src *; base-uri 'none'; form-action 'none'");
-                        headers.add("X-Content-Type-Options", "nosniff");
-                    }
+                    // Every generated document is untrusted, including SVG served
+                    // inline as an image. Isolate document origins and active content;
+                    // retain static styles/media and explicit downloads for previews.
+                    headers.add("Content-Security-Policy",
+                            "sandbox allow-downloads; default-src 'none'; img-src * data:; "
+                                    + "style-src 'unsafe-inline'; font-src * data:; media-src *; "
+                                    + "base-uri 'none'; form-action 'none'");
+                    headers.add("X-Content-Type-Options", "nosniff");
                     headers.add(HttpHeaders.CONTENT_DISPOSITION,
                             disposition + "; filename=\"" + sanitizeAscii(entry.filename())
                                     + "\"; filename*=UTF-8''" + encodedName);
