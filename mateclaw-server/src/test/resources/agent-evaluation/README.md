@@ -105,3 +105,49 @@ storage, not an accepted strong-validation result. The report never emits a
 CHECK_RESULT/PASS. These eight tests plus ten evaluator replays are **18 fixed
 scenarios, not 18 Agent task executions**. Actual task-solving models, their
 latency, cost and success rate remain unmeasured.
+
+## JSON artifact check pilot
+
+The evidence details panel can explicitly check a registered JSON file with
+`POST /api/v1/execution-evidence/{id}/json-check` and a body such as
+`{"requiredFields":["report","appendix"]}`. The server uses the conversation and
+file permissions of the authenticated caller. Field names are exact top-level
+keys (1–16 unique keys, up to 128 characters each); values must be non-null.
+This does not validate value types, business correctness, or document quality.
+
+The fixed `json-required-fields` recipe revision 1 reads at most the configured
+artifact-version budget, capped at 1 MiB. Zero disables reading. Durable bytes
+must match the registered digest before parsing. The result distinguishes
+`MATCH`, `MISSING_FIELDS`, `INVALID_JSON`, `UNKNOWN`, `STALE`, `UNAVAILABLE` and
+always has `acceptanceEligible=false`. Duplicate keys, multiple JSON documents,
+and nesting deeper than 32 are rejected. Responses contain no file values or
+parser excerpts. No Goal criterion, acceptance binding, or evidence PASS is
+written. The result describes the captured bytes at the displayed time; shared
+storage still has no managed generation/owner fence.
+
+Run the separate six-case IO/recipe replay:
+
+```sh
+mvn -pl mateclaw-server -am -Dtest=OfflineJsonArtifactTaskReplayTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Djson.artifact.eval.revision="$(git rev-parse HEAD)" test
+```
+
+Default output: `mateclaw-server/target/agent-evaluation/json-artifact-baseline.json`.
+Override `json.artifact.eval.suite` and `json.artifact.eval.report` with absolute
+paths. `json-artifact-boundaries-v1.json` contains requirements and explicit
+expected status, missing fields, whether the recipe actually ran, and whether
+acceptance was granted. The harness validates all tasks before creating its own
+temporary paths. Operations are allowlisted: `CHECK`, `REWRITE_DISK`,
+`TOO_SMALL_BUDGET`, `FOREIGN_OWNER`. It never executes fixture paths or commands.
+
+The report hashes the suite and loaded cache/read-result/recipe/result classes,
+records every mismatch, and fails the command if any case differs. Class hashes
+identify these loaded classes under this build, not every dependency.
+`json-artifact-baseline-v1.json` is the initial six-case baseline. Together with
+the earlier ten evaluator and eight platform IO scenarios there are **24 fixed
+scenarios**, not 24 real Agent runs. The JSON replay uses real temporary durable
+files and the production recipe; it does not exercise HTTP authorization or a
+browser. Those boundaries have separate service/UI regressions. Its mode is
+`offline_platform_fixture_jsoncheck`; online calls are zero and Agent success
+rate/online cost remain `not_measured`.
