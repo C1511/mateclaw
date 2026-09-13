@@ -96,6 +96,7 @@ public class GoalEvaluationService implements Evaluator {
         // choose the last value of an ambiguous model-produced JSON key.
         ObjectMapper evaluatorJson = objectMapper.copy()
                 .disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                 .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
         this.draftConverter = new BeanOutputConverter<>(GoalCriteriaDraft.class, evaluatorJson);
         this.verdictConverter = new BeanOutputConverter<>(GoalChecklistVerdict.class, evaluatorJson);

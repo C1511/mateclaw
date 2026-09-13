@@ -299,6 +299,27 @@ class GoalEvaluationServiceTest {
         }
     }
 
+    @Test
+    void aSecondStructuredResultCannotBeIgnoredAfterACompletionVerdict() {
+        stubChatResponse("{\"criterionVerdicts\":[{\"id\":\"C1\",\"passed\":true,\"evidence\":\"ready\"},"
+                + "{\"id\":\"C2\",\"passed\":true,\"evidence\":\"ready\"}]} "
+                + "{\"criterionVerdicts\":[{\"id\":\"C1\",\"passed\":false,\"evidence\":\"not ready\"}]}");
+        var result = svc.evaluate(goalWithCriteria(), List.of(), "finished");
+        assertEquals(GoalEvaluationResult.DECISION_FALLBACK, result.decision());
+        assertFalse(result.completed());
+        assertEquals(1, result.llmCallsConsumed());
+        assertTrue(result.criterionVerdicts().isEmpty());
+    }
+
+    @Test
+    void bootstrapCannotIgnoreTrailingContradictoryContent() {
+        stubChatResponse("{\"criteria\":[{\"text\":\"deliver report\"}]} {\"criteria\":[]}");
+        var result = svc.evaluate(goal(), List.of(), "finished");
+        assertEquals(GoalEvaluationResult.DECISION_FALLBACK, result.decision());
+        assertEquals(1, result.llmCallsConsumed());
+        assertNull(result.bootstrapCriteria());
+    }
+
     // ==================== Parser tolerance ====================
 
     @Test
