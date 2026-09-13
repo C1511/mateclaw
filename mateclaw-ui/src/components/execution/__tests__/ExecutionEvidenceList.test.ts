@@ -125,6 +125,54 @@ describe('execution evidence', () => {
   expect(host.querySelector('[data-json-result]')).toBeNull()
   expect(host.textContent).not.toContain('All listed fields are present')
  })
+ it.each([false, true])('invalidates JSON results when artifact details are refreshed (pending=%s)', async (pending) => {
+  const artifact = { ...row('artifact'), kind: 'ARTIFACT_SNAPSHOT', artifactRef: 'file', artifactDigest: 'hash' }
+  const result = { data: { status: 'MATCH', missingFields: [], checkedAt: 'old', acceptanceEligible: false } }
+  let resolveCheck!: (value: unknown) => void
+  vi.mocked(executionEvidenceApi.list).mockResolvedValue({ data: { items: [artifact], nextCursor: null } } as never)
+  vi.mocked(executionEvidenceApi.get).mockResolvedValue({ data: { ...artifact, validity: 'STALE' } } as never)
+  vi.mocked(executionEvidenceApi.checkJson).mockImplementationOnce(() => new Promise(r => { resolveCheck = r }) as never)
+    .mockResolvedValueOnce({ data: { ...result.data, status: 'STALE', checkedAt: 'new' } } as never)
+  const { host } = mount(); host.querySelector<HTMLButtonElement>('[data-evidence-toggle]')!.click(); await flush()
+  const field = host.querySelector<HTMLTextAreaElement>('[data-json-fields]')!
+  field.value = 'report'; field.dispatchEvent(new Event('input')); await flush()
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await flush()
+  if (!pending) {
+    resolveCheck(result); await flush()
+    expect(host.querySelector('[data-json-result]')?.textContent).toContain('All listed fields are present')
+  }
+  const details = host.querySelector('details')!; details.open = true; details.dispatchEvent(new Event('toggle')); await flush()
+  expect(host.textContent).toContain(en.executionEvidence.validity.STALE)
+  if (pending) { resolveCheck(result); await flush() }
+  expect(host.querySelector('[data-json-result]')).toBeNull()
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await flush()
+  expect(executionEvidenceApi.checkJson).toHaveBeenCalledTimes(2)
+  expect(host.querySelector('[data-json-result]')?.textContent).toContain('new')
+  expect(host.querySelector('[data-json-result]')?.textContent).not.toContain('All listed fields are present')
+ })
+ it('ignores an obsolete check rejection while a replacement check is pending', async () => {
+  const artifact = { ...row('artifact'), kind: 'ARTIFACT_SNAPSHOT', artifactRef: 'file' }
+  let rejectOld!: (reason: unknown) => void
+  let resolveNew!: (value: unknown) => void
+  vi.mocked(executionEvidenceApi.list).mockResolvedValue({ data: { items: [artifact], nextCursor: null } } as never)
+  vi.mocked(executionEvidenceApi.get).mockResolvedValue({ data: artifact } as never)
+  vi.mocked(executionEvidenceApi.checkJson).mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject }) as never)
+    .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve }) as never)
+  const { host } = mount(); host.querySelector<HTMLButtonElement>('[data-evidence-toggle]')!.click(); await flush()
+  const field = host.querySelector<HTMLTextAreaElement>('[data-json-fields]')!
+  field.value = 'report'; field.dispatchEvent(new Event('input')); await flush()
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await flush()
+  const details = host.querySelector('details')!; details.open = true; details.dispatchEvent(new Event('toggle')); await flush()
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { cancelable: true })); await flush()
+  expect(executionEvidenceApi.checkJson).toHaveBeenCalledTimes(2)
+  rejectOld({ code: 403 }); await flush()
+  expect(host.querySelector('[data-evidence-item]')).not.toBeNull()
+  expect(host.querySelector<HTMLButtonElement>('[data-json-check]')!.disabled).toBe(true)
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  resolveNew({ data: { status: 'MATCH', missingFields: [], checkedAt: 'new', acceptanceEligible: false } }); await flush()
+  expect(host.querySelector('[data-json-result]')?.textContent).toContain('new')
+  expect(host.querySelector<HTMLButtonElement>('[data-json-check]')!.disabled).toBe(false)
+ })
  it('rejects empty JSON requirements locally without reading the file', async () => {
   vi.mocked(executionEvidenceApi.list).mockResolvedValue({ data: { items: [{ ...row('artifact'), kind: 'ARTIFACT_SNAPSHOT', artifactRef: 'file' }], nextCursor: null } } as never)
   const { host } = mount(); host.querySelector<HTMLButtonElement>('[data-evidence-toggle]')!.click(); await flush()

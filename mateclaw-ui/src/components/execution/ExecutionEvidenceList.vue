@@ -17,7 +17,15 @@ const checkFields = ref<Record<string, string>>({})
 const checkLoading = ref<Record<string, boolean>>({})
 const checkErrors = ref<Record<string, string>>({})
 const checkResults = ref<Record<string, ArtifactJsonCheck>>({})
+let checkGeneration: Record<string, number> = {}
+function invalidateCheck(id: string) {
+  checkGeneration[id] = (checkGeneration[id] ?? 0) + 1
+  delete checkLoading.value[id]
+  delete checkErrors.value[id]
+  delete checkResults.value[id]
+}
 function clearChecks() {
+  checkGeneration = {}
   checkFields.value = {}
   checkLoading.value = {}
   checkErrors.value = {}
@@ -66,6 +74,7 @@ async function loadDetail(id: string, event: Event) {
   if (!(event.target as HTMLDetailsElement).open || detailLoading.value[id]) return
   const request = generation
   detailLoading.value[id] = true
+  invalidateCheck(id)
   delete detailErrors.value[id]
   try {
     const { data } = await executionEvidenceApi.get(id)
@@ -86,7 +95,7 @@ async function loadDetail(id: string, event: Event) {
   }
 }
 async function checkJson(id: string) {
-  if (checkLoading.value[id]) return
+  if (loading.value || detailLoading.value[id] || checkLoading.value[id]) return
   const fields = (checkFields.value[id] ?? '').split(/\r?\n/).filter(field => field.length > 0)
   delete checkResults.value[id]
   delete checkErrors.value[id]
@@ -96,17 +105,19 @@ async function checkJson(id: string) {
     return
   }
   const request = generation
+  const checkRequest = checkGeneration[id] ?? 0
+  const isCurrent = () => request === generation && checkRequest === (checkGeneration[id] ?? 0)
   checkLoading.value[id] = true
   try {
     const { data } = await executionEvidenceApi.checkJson(id, fields)
-    if (request !== generation || !items.value.some(item => item.id === id)) return
+    if (!isCurrent() || !items.value.some(item => item.id === id)) return
     checkResults.value[id] = data
     if (data.status === 'UNAVAILABLE') {
       items.value = items.value.map(item => item.id === id
         ? { ...item, artifactRef: null, artifactDigest: null, summary: null, validity: 'UNAVAILABLE' } : item)
     }
   } catch (error) {
-    if (request !== generation) return
+    if (!isCurrent()) return
     const failure = error as { code?: number; response?: { status?: number } }
     const code = failure.response?.status ?? failure.code
     if (code === 401 || code === 403 || code === 404) {
@@ -117,7 +128,7 @@ async function checkJson(id: string) {
       checkErrors.value[id] = code === 400 ? 'executionEvidence.jsonCheck.inputError' : 'executionEvidence.loadError'
     }
   } finally {
-    if (request === generation) delete checkLoading.value[id]
+    if (isCurrent()) delete checkLoading.value[id]
   }
 }
 function toggle() {
@@ -178,10 +189,10 @@ onBeforeUnmount(() => { generation++ })
             <form v-if="item.kind === 'ARTIFACT_SNAPSHOT' && item.artifactRef" class="json-check" @submit.prevent="checkJson(item.id)">
               <label :for="`json-fields-${item.id}`">{{ t('executionEvidence.jsonCheck.label') }}</label>
               <textarea :id="`json-fields-${item.id}`" v-model="checkFields[item.id]" data-json-fields rows="3" maxlength="2064"
-                :disabled="!!checkLoading[item.id]" :placeholder="t('executionEvidence.jsonCheck.placeholder')"
+                :disabled="loading || !!detailLoading[item.id] || !!checkLoading[item.id]" :placeholder="t('executionEvidence.jsonCheck.placeholder')"
                 @input="delete checkResults[item.id]" />
               <p>{{ t('executionEvidence.jsonCheck.scope') }}</p>
-              <button type="submit" data-json-check :disabled="!!checkLoading[item.id]">{{ t(checkLoading[item.id] ? 'common.loading' : 'executionEvidence.jsonCheck.run') }}</button>
+              <button type="submit" data-json-check :disabled="loading || !!detailLoading[item.id] || !!checkLoading[item.id]">{{ t(checkLoading[item.id] ? 'common.loading' : 'executionEvidence.jsonCheck.run') }}</button>
             </form>
             <p v-if="checkErrors[item.id]" role="alert">{{ t(checkErrors[item.id]) }}</p>
             <div v-if="checkResults[item.id]" data-json-result role="status">
