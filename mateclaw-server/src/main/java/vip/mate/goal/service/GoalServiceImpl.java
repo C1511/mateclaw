@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Default implementation. Concurrency safety relies on:
@@ -259,10 +260,32 @@ public class GoalServiceImpl implements GoalService {
             if (!changed) {
                 return null; // idempotent no-op
             }
+            boolean exitsChanged = req.getExitCriteria() != null
+                    && !Objects.equals(req.getExitCriteria(), fresh.getExitCriteria());
+            boolean definitionChanged = exitsChanged
+                    || req.getPersistentExecution() != null
+                        && !Objects.equals(req.getPersistentExecution(), Boolean.TRUE.equals(fresh.getPersistentExecution()))
+                    || req.getTitle() != null && !req.getTitle().isBlank()
+                        && !Objects.equals(req.getTitle().trim(), fresh.getTitle())
+                    || req.getDescription() != null && !Objects.equals(req.getDescription(), fresh.getDescription())
+                    || req.getSuccessCheckPrompt() != null
+                        && !Objects.equals(req.getSuccessCheckPrompt(), fresh.getSuccessCheckPrompt());
+            if (definitionChanged) {
+                // Replacing the free-text exit definition requires a new draft.
+                // Other context edits preserve user criterion text but revoke its old verdicts.
+                String criteria = exitsChanged ? null : GoalCriteriaCodec.serialize(
+                        GoalCriteriaCodec.parse(fresh.getCriteria(), objectMapper).stream()
+                                .map(c -> new GoalCriterion(c.id(), c.text(), false, "")).toList(), objectMapper);
+                w.set(GoalEntity::getEvaluationRevision, Math.addExact(fresh.getEvaluationRevision(), 1L))
+                 .set(GoalEntity::getCriteria, criteria)
+                 .set(GoalEntity::getCompletionScore, 0.0)
+                 .set(GoalEntity::getProgressSummary, "Goal definition changed; reevaluation required");
+            }
             bumpVersionAndTime(w);
             return w;
         });
-        recordAudit("goal.updated", updated, Map.of("by", username));
+        recordAudit("goal.updated", updated, Map.of("by", username,
+                "evaluationRevision", updated.getEvaluationRevision()));
         return updated;
     }
 
@@ -362,6 +385,10 @@ public class GoalServiceImpl implements GoalService {
                             "Automatic completion cannot replace another terminal state");
                 }
                 return null; // idempotent
+            }
+            if (evaluated && result.evaluationRevision() != fresh.getEvaluationRevision()) {
+                throw new MateClawException("err.goal.completion_not_verified", 409,
+                        "Automatic completion requires the current evaluation definition revision");
             }
             boolean persistent = Boolean.TRUE.equals(fresh.getPersistentExecution());
             List<GoalCriterion> existing = GoalCriteriaCodec.parse(fresh.getCriteria(), objectMapper);
@@ -471,8 +498,8 @@ public class GoalServiceImpl implements GoalService {
                     .set(GoalEntity::getLastEvaluationAt, LocalDateTime.now());
             // Late model results still consume usage, but cannot overwrite a
             // persistent pause/input boundary established while the call ran.
-            if (result != null && (!Boolean.TRUE.equals(fresh.getPersistentExecution())
-                    || fresh.getStatus() == GoalStatus.ACTIVE)) {
+            if (result != null && result.evaluationRevision() == fresh.getEvaluationRevision()
+                    && (!Boolean.TRUE.equals(fresh.getPersistentExecution()) || fresh.getStatus() == GoalStatus.ACTIVE)) {
                 // Persist the checklist by carrier: bootstrap writes the fresh
                 // draft; verdict merges the per-criterion delta into the
                 // current list (re-read on the locked `fresh` to avoid races).
@@ -507,6 +534,9 @@ public class GoalServiceImpl implements GoalService {
             detail.put("decision", result.decision());
             detail.put("evaluatorScore", result.score());
             detail.put("evaluatorGap", result.gap());
+            detail.put("evaluatedRevision", result.evaluationRevision());
+            detail.put("currentEvaluationRevision", g.getEvaluationRevision());
+            detail.put("staleEvaluation", result.evaluationRevision() != g.getEvaluationRevision());
             detail.put("evaluatorModel", result.evaluatorModel());
             detail.put("latencyMs", result.latencyMs());
         }

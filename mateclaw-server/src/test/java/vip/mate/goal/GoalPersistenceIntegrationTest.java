@@ -120,6 +120,85 @@ class GoalPersistenceIntegrationTest {
     }
 
     @Test
+    void replacingExitCriteriaRevokesOldCompletion() {
+        GoalEntity created = goalService.create(req("edited-definition-completion", "report"), "alice");
+        goalService.appendCriterion(created.getId(), "old report", "alice");
+        var passed = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict(
+                        "C1", true, "old report written")), null);
+        goalService.recordEvaluation(created.getId(), passed, 1, 1);
+        var edit = new vip.mate.goal.model.GoalUpdateRequest();
+        edit.setExitCriteria("require a different report with an appendix");
+        goalService.update(created.getId(), edit, "alice");
+        assertThrows(MateClawException.class, () -> goalService.markEvaluatedCompleted(created.getId(), passed));
+        assertEquals(0.0, goalService.getById(created.getId()).getCompletionScore());
+    }
+
+    @Test
+    void staleDraftAndVerdictCannotCrossDefinitionRevisionButCurrentOnesCan() {
+        GoalEntity created = goalService.create(req("definition-revision-carriers", "report"), "alice");
+        var oldDraft = new vip.mate.goal.model.GoalEvaluationResult(0.0, "draft", "continue", false,
+                "fixture", 1, 0, java.util.List.of(), java.util.List.of(
+                new vip.mate.goal.model.GoalCriterion("C1", "old report", false, "")));
+        var edit = new vip.mate.goal.model.GoalUpdateRequest(); edit.setExitCriteria("new report");
+        goalService.update(created.getId(), edit, "alice");
+        assertEquals(1L, goalService.getById(created.getId()).getEvaluationRevision());
+        goalService.recordEvaluation(created.getId(), oldDraft, 1, 1);
+        assertEquals(null, goalService.getById(created.getId()).getCriteria());
+        var newDraft = new vip.mate.goal.model.GoalEvaluationResult(0.0, "draft", "continue", false,
+                "fixture", 1, 0, java.util.List.of(), java.util.List.of(
+                new vip.mate.goal.model.GoalCriterion("C1", "new report", false, ""))).withEvaluationRevision(1);
+        goalService.recordEvaluation(created.getId(), newDraft, 1, 1);
+        var oldPass = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict(
+                        "C1", true, "old report evidence")), null);
+        goalService.recordEvaluation(created.getId(), oldPass, 1, 1);
+        assertEquals(0.0, goalService.getById(created.getId()).getCompletionScore());
+        var currentPass = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict(
+                        "C1", true, "new report evidence")), null).withEvaluationRevision(1);
+        goalService.recordEvaluation(created.getId(), currentPass, 1, 1);
+        // Even after current criteria pass, an old result cannot perform the final transition.
+        assertThrows(MateClawException.class, () -> goalService.markEvaluatedCompleted(created.getId(), oldPass));
+        assertEquals(4, goalService.getById(created.getId()).getEvalLlmCallsUsed());
+        assertEquals(GoalStatus.COMPLETED, goalService.markEvaluatedCompleted(created.getId(), currentPass).getStatus());
+    }
+
+    @Test
+    void definitionRevisionSurvivesAbaAndIgnoresIdenticalAndBudgetEdits() {
+        var request = req("definition-revision-aba", "report"); request.setExitCriteria("A");
+        GoalEntity created = goalService.create(request, "alice");
+        var edit = new vip.mate.goal.model.GoalUpdateRequest(); edit.setExitCriteria("A"); edit.setTurnBudget(12);
+        goalService.update(created.getId(), edit, "alice");
+        assertEquals(0L, goalService.getById(created.getId()).getEvaluationRevision());
+        edit.setExitCriteria("B"); goalService.update(created.getId(), edit, "alice");
+        edit.setExitCriteria("A"); goalService.update(created.getId(), edit, "alice");
+        assertEquals(2L, goalService.getById(created.getId()).getEvaluationRevision());
+        var stale = new vip.mate.goal.model.GoalEvaluationResult(0.0, "draft", "continue", false,
+                "fixture", 1, 0, java.util.List.of(), java.util.List.of(
+                new vip.mate.goal.model.GoalCriterion("C1", "A", false, "")));
+        goalService.recordEvaluation(created.getId(), stale, 0, 1);
+        assertEquals(null, goalService.getById(created.getId()).getCriteria());
+    }
+
+    @Test
+    void contextEditPreservesCriterionTextButRevokesPriorPass() {
+        GoalEntity created = goalService.create(req("definition-context-edit", "report"), "alice");
+        goalService.appendCriterion(created.getId(), "user criterion", "alice");
+        var passed = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict(
+                        "C1", true, "old evidence")), null);
+        goalService.recordEvaluation(created.getId(), passed, 0, 1);
+        var edit = new vip.mate.goal.model.GoalUpdateRequest(); edit.setDescription("changed context");
+        var saved = goalService.update(created.getId(), edit, "alice");
+        var criteria = vip.mate.goal.model.GoalCriteriaCodec.parse(saved.getCriteria(), new com.fasterxml.jackson.databind.ObjectMapper());
+        assertEquals("user criterion", criteria.getFirst().text());
+        org.junit.jupiter.api.Assertions.assertFalse(criteria.getFirst().passed());
+        assertEquals("", criteria.getFirst().evidence());
+        assertEquals(1L, saved.getEvaluationRevision());
+    }
+
+    @Test
     @DisplayName("GoalStatus values persist as lowercase literals — load-bearing for uk_agent_goal_active_conv")
     void status_persistsAsLowercaseString() {
         GoalEntity created = goalService.create(req("conv-status-1", "lower-case check"), "alice");

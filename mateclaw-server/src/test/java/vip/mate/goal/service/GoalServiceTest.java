@@ -690,6 +690,25 @@ class GoalServiceTest {
         assertTrue(retry.getParamNameValuePairs().containsValue("Still missing: appendix"));
     }
 
+    @Test
+    void staleEvaluationStopsProjectingAfterCasRevisionChange() {
+        GoalEntity original = persisted(1L, GoalStatus.ACTIVE);
+        original.setCriteria("[{\"id\":\"C1\",\"text\":\"report\",\"passed\":false,\"evidence\":\"\"}]");
+        GoalEntity fresh = persisted(1L, GoalStatus.ACTIVE);
+        fresh.setVersion(1); fresh.setEvaluationRevision(1L); fresh.setCriteria(original.getCriteria());
+        when(goalMapper.selectById(1L)).thenReturn(original, original, fresh, fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0, 1);
+        var result = new GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict("C1", true, "evidence")), null);
+        service.recordEvaluation(1L, result, 2, 1);
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper, times(2)).update(any(), writes.capture());
+        assertTrue(setsProperty(writes.getAllValues().getFirst(), "criteria"));
+        assertFalse(setsProperty(writes.getAllValues().getLast(), "criteria"));
+        assertFalse(setsProperty(writes.getAllValues().getLast(), "completionScore"));
+        assertTrue(writes.getAllValues().getLast().getSqlSet().contains("eval_llm_calls_used = eval_llm_calls_used + 1"));
+    }
+
     // ==================== criteria checklist ====================
 
     @Test

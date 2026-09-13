@@ -108,6 +108,19 @@ class GoalEvaluationServiceTest {
         assertTrue(result.gap().contains("TLS enabled"));
     }
 
+    @Test
+    void stampsRevisionCapturedBeforeTheModelCall() {
+        GoalEntity goal = goalWithCriteria(); goal.setEvaluationRevision(7L);
+        when(modelConfigService.getDefaultModel()).thenReturn(model("fixture"));
+        when(chatModelFactory.buildFor(any(ModelConfigEntity.class), any(RetryTemplate.class))).thenReturn(chatModel);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(call -> {
+            goal.setEvaluationRevision(8L);
+            return new ChatResponse(List.of(new Generation(new AssistantMessage(
+                    "{\"criterionVerdicts\":[],\"summary\":\"unchanged\"}"))));
+        });
+        assertEquals(7L, svc.evaluate(goal, List.of(), "answer").evaluationRevision());
+    }
+
     // ==================== Pre-flight guards ====================
 
     @Test

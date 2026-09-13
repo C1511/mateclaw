@@ -122,6 +122,7 @@ public class GoalEvaluationService implements Evaluator {
 
         List<GoalCriterion> existing = GoalCriteriaCodec.parse(goal.getCriteria(), objectMapper);
         boolean bootstrap = existing.isEmpty();
+        long evaluationRevision = goal.getEvaluationRevision();
 
         long start = System.currentTimeMillis();
         try {
@@ -148,16 +149,18 @@ public class GoalEvaluationService implements Evaluator {
             if (body == null || body.isBlank()) {
                 log.warn("[GoalEvaluation] empty response from evaluator model={}", model.getModelName());
                 // The call was really spent — bill it.
-                return GoalEvaluationResult.fallbackAfterCall("empty_response", model.getModelName(), elapsed);
+                return GoalEvaluationResult.fallbackAfterCall("empty_response", model.getModelName(), elapsed)
+                        .withEvaluationRevision(evaluationRevision);
             }
 
-            return bootstrap
+            return (bootstrap
                     ? parseBootstrap(body, model.getModelName(), elapsed)
-                    : parseVerdict(body, existing, model.getModelName(), elapsed);
+                    : parseVerdict(body, existing, model.getModelName(), elapsed))
+                    .withEvaluationRevision(evaluationRevision);
         } catch (Throwable t) {
             long elapsed = System.currentTimeMillis() - start;
             log.warn("[GoalEvaluation] evaluator call failed after {}ms: {}", elapsed, t.toString());
-            return GoalEvaluationResult.fallback("call_failed");
+            return GoalEvaluationResult.fallback("call_failed").withEvaluationRevision(evaluationRevision);
         }
     }
 
