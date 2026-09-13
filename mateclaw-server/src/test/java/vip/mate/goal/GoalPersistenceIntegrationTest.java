@@ -78,6 +78,24 @@ class GoalPersistenceIntegrationTest {
     }
 
     @Test
+    void lateBootstrapCannotReplaceUserCriterionCommittedWhileModelWasRunning() {
+        GoalEntity created = goalService.create(req("bootstrap-append-boundary", "prepare a report"), "alice");
+        // The evaluator started with an empty checklist. A user append commits
+        // before its delayed bootstrap result reaches recordEvaluation.
+        goalService.appendCriterion(created.getId(), "include the user requested appendix", "alice");
+        var delayed = new vip.mate.goal.model.GoalEvaluationResult(0.0, "checklist created", "continue", false,
+                "fixture", 1, 0, java.util.List.of(), java.util.List.of(
+                new vip.mate.goal.model.GoalCriterion("C1", "model draft", false, "")));
+        goalService.recordEvaluation(created.getId(), delayed, 2, 1);
+        GoalEntity saved = goalService.getById(created.getId());
+        var criteria = vip.mate.goal.model.GoalCriteriaCodec.parse(saved.getCriteria(), new com.fasterxml.jackson.databind.ObjectMapper());
+        assertEquals(1, criteria.size());
+        assertEquals("include the user requested appendix", criteria.getFirst().text());
+        assertEquals(1, saved.getEvalLlmCallsUsed());
+        assertEquals(2, saved.getAgentLlmCallsUsed());
+    }
+
+    @Test
     @DisplayName("GoalStatus values persist as lowercase literals — load-bearing for uk_agent_goal_active_conv")
     void status_persistsAsLowercaseString() {
         GoalEntity created = goalService.create(req("conv-status-1", "lower-case check"), "alice");

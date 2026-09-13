@@ -506,11 +506,17 @@ public class GoalServiceImpl implements GoalService {
     /**
      * Compute the next criteria JSON for a record-evaluation write, or
      * {@code null} when the result carries no checklist change. Bootstrap
-     * results replace the list with the freshly derived draft; verdict
+     * results initialize a still-empty list with the derived draft; verdict
      * results merge their per-criterion delta into the locked-row list.
      */
     private String nextCriteriaJson(GoalEntity fresh, GoalEvaluationResult result) {
         if (result.bootstrapCriteria() != null && !result.bootstrapCriteria().isEmpty()) {
+            // A user append or another evaluator may have initialized the
+            // checklist while this model call ran. The fresh canonical list
+            // wins, including after an optimistic-lock retry.
+            if (!GoalCriteriaCodec.parse(fresh.getCriteria(), objectMapper).isEmpty()) {
+                return null;
+            }
             return GoalCriteriaCodec.serialize(result.bootstrapCriteria(), objectMapper);
         }
         if (result.criterionVerdicts() != null && !result.criterionVerdicts().isEmpty()) {

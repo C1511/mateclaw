@@ -618,6 +618,53 @@ class GoalServiceTest {
         verify(goalMapper, never()).selectById(any());
     }
 
+    private GoalEvaluationResult bootstrapEvaluation() {
+        return new GoalEvaluationResult(0.0, "checklist created", "continue", false, "fixture", 1, 0,
+                java.util.List.of(), java.util.List.of(
+                        new vip.mate.goal.model.GoalCriterion("C1", "model draft", false, "")));
+    }
+
+    @Test
+    void bootstrapInitializesStillEmptyChecklist() {
+        GoalEntity empty = persisted(1L, GoalStatus.ACTIVE);
+        when(goalMapper.selectById(1L)).thenReturn(empty);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        service.recordEvaluation(1L, bootstrapEvaluation(), 2, 1);
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper).update(any(), writes.capture());
+        assertTrue(setsProperty(writes.getValue(), "criteria"));
+        assertTrue(writes.getValue().getParamNameValuePairs().values().stream()
+                .anyMatch(value -> String.valueOf(value).contains("model draft")));
+    }
+
+    @Test
+    void lateBootstrapPreservesChecklistEstablishedByUser() {
+        GoalEntity fresh = persisted(1L, GoalStatus.ACTIVE);
+        fresh.setCriteria("[{\"id\":\"C1\",\"text\":\"user requirement\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        service.recordEvaluation(1L, bootstrapEvaluation(), 2, 1);
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper).update(any(), writes.capture());
+        assertFalse(setsProperty(writes.getValue(), "criteria"), "late bootstrap must preserve current user criteria");
+        assertTrue(writes.getValue().getSqlSet().contains("eval_llm_calls_used = eval_llm_calls_used + 1"));
+    }
+
+    @Test
+    void bootstrapRechecksEmptyChecklistAfterCasConflict() {
+        GoalEntity empty = persisted(1L, GoalStatus.ACTIVE);
+        GoalEntity fresh = persisted(1L, GoalStatus.ACTIVE);
+        fresh.setVersion(1);
+        fresh.setCriteria("[{\"id\":\"C1\",\"text\":\"concurrent user requirement\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(empty, empty, fresh, fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0, 1);
+        service.recordEvaluation(1L, bootstrapEvaluation(), 2, 1);
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper, times(2)).update(any(), writes.capture());
+        assertTrue(setsProperty(writes.getAllValues().get(0), "criteria"));
+        assertFalse(setsProperty(writes.getAllValues().get(1), "criteria"), "retry must not replace newly established criteria");
+    }
+
     // ==================== criteria checklist ====================
 
     @Test
