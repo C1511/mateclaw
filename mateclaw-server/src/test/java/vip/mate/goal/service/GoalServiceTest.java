@@ -628,6 +628,28 @@ class GoalServiceTest {
     }
 
     @Test
+    void appendProgressUsesFreshChecklistAfterCasConflict() {
+        GoalEntity original = persisted(1L, GoalStatus.ACTIVE);
+        original.setCriteria("[{\"id\":\"C1\",\"text\":\"report\",\"passed\":true,\"evidence\":\"report written\"}]");
+        GoalEntity fresh = persisted(1L, GoalStatus.ACTIVE);
+        fresh.setVersion(1);
+        fresh.setCriteria("[{\"id\":\"C1\",\"text\":\"report\",\"passed\":true,\"evidence\":\"report written\"},"
+                + "{\"id\":\"C2\",\"text\":\"sources\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(original, fresh, fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0, 1);
+        service.appendCriterion(1L, "appendix", "alice");
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper, times(2)).update(any(), writes.capture());
+        var first = writes.getAllValues().getFirst();
+        var retry = writes.getAllValues().getLast();
+        assertTrue(setsProperty(first, "completionScore"));
+        assertTrue(setsProperty(retry, "completionScore"));
+        assertTrue(first.getParamNameValuePairs().containsValue(0.5));
+        assertTrue(retry.getParamNameValuePairs().containsValue(1.0 / 3));
+        assertTrue(retry.getParamNameValuePairs().containsValue("Still missing: sources; appendix"));
+    }
+
+    @Test
     void appendCriterion_rejectsBlankInput() {
         // Validation happens before selectById, so we do NOT stub the mapper.
         MateClawException ex = assertThrows(MateClawException.class,

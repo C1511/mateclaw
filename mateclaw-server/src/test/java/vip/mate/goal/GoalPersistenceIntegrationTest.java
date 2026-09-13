@@ -239,6 +239,24 @@ class GoalPersistenceIntegrationTest {
     }
 
     @Test
+    void appendedRequirementImmediatelyRefreshesProgressWithoutLosingPriorEvidence() {
+        GoalEntity goal = readyForCompletion("append-progress", "report");
+        assertEquals(1.0, goal.getCompletionScore());
+        GoalEntity appended = goalService.appendCriterion(goal.getId(), "appendix", "alice");
+        assertEquals(0.5, appended.getCompletionScore());
+        assertEquals("Still missing: appendix", appended.getProgressSummary());
+        var criteria = vip.mate.goal.model.GoalCriteriaCodec.parse(appended.getCriteria(), new com.fasterxml.jackson.databind.ObjectMapper());
+        assertEquals(true, criteria.getFirst().passed());
+        assertEquals("report evidence", criteria.getFirst().evidence());
+        assertEquals(false, criteria.getLast().passed());
+        assertEquals(goal.getEvaluationRevision(), appended.getEvaluationRevision());
+        GoalEntity again = goalService.appendCriterion(goal.getId(), "sources", "alice");
+        assertEquals(1.0 / 3, again.getCompletionScore(), 0.00001);
+        assertEquals("Still missing: appendix; sources", again.getProgressSummary());
+        assertEquals(GoalStatus.ACTIVE, goalService.getById(goal.getId()).getStatus());
+    }
+
+    @Test
     void rolledBackCompletionDoesNotSyncMemory() {
         GoalEntity goal = readyForCompletion("completion-memory-rollback", "report");
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {

@@ -549,12 +549,7 @@ public class GoalServiceImpl implements GoalService {
                 if (!current.isEmpty() && !GoalEvaluationResult.DECISION_FALLBACK.equals(result.decision())) {
                     // The model may have seen fewer criteria. Derive the public
                     // projection from the same fresh checklist this CAS writes.
-                    List<GoalCriterion> remaining = GoalCriteriaCodec.remaining(current);
-                    double score = (double) (current.size() - remaining.size()) / current.size();
-                    String gap = remaining.isEmpty() ? "" : "Still missing: " + remaining.stream()
-                            .map(GoalCriterion::text).collect(java.util.stream.Collectors.joining("; "));
-                    w.set(GoalEntity::getCompletionScore, score)
-                     .set(GoalEntity::getProgressSummary, gap);
+                    setChecklistProgress(w, current);
                 } else {
                     w.set(GoalEntity::getCompletionScore, result.score())
                      .set(GoalEntity::getProgressSummary, result.gap());
@@ -675,6 +670,7 @@ public class GoalServiceImpl implements GoalService {
             LambdaUpdateWrapper<GoalEntity> w = baseLockedUpdate(fresh)
                     .set(GoalEntity::getCriteria, criteriaJson)
                     .set(GoalEntity::getExitCriteria, mergedText);
+            setChecklistProgress(w, list);
             bumpVersionAndTime(w);
             return w;
         });
@@ -686,6 +682,16 @@ public class GoalServiceImpl implements GoalService {
                 "criteria", full,
                 "by", username));
         return g;
+    }
+
+    /** Both evaluation and user edits project the checklist written by this CAS. */
+    private static void setChecklistProgress(LambdaUpdateWrapper<GoalEntity> update, List<GoalCriterion> criteria) {
+        List<GoalCriterion> remaining = GoalCriteriaCodec.remaining(criteria);
+        double score = criteria.isEmpty() ? 0.0 : (double) (criteria.size() - remaining.size()) / criteria.size();
+        String gap = remaining.isEmpty() ? "" : "Still missing: " + remaining.stream()
+                .map(GoalCriterion::text).collect(java.util.stream.Collectors.joining("; "));
+        update.set(GoalEntity::getCompletionScore, score)
+                .set(GoalEntity::getProgressSummary, gap);
     }
 
     // ==================== Internals ====================
