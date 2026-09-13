@@ -28,6 +28,20 @@ class OfflineGoalTaskReplayTest {
         assertEquals(0, report.mismatchedCases(), () -> "Replay mismatches: " + output.toAbsolutePath());
         assertEquals(0, report.onlineModelCalls());
         assertEquals("not_measured", report.agentTaskSuccessRate());
+        var serialized = OfflineGoalTaskReplay.JSON.valueToTree(report);
+        assertEquals("caller_supplied_label", serialized.path("revisionSource").asText());
+        var classes = serialized.path("executedClassSha256");
+        assertEquals(4, classes.size());
+        for (Class<?> type : java.util.List.of(vip.mate.goal.service.GoalEvaluationService.class,
+                vip.mate.goal.model.GoalCriteriaCodec.class, vip.mate.goal.model.GoalCriterion.class,
+                vip.mate.goal.model.GoalEvaluationResult.class)) {
+            try (var stream = type.getResourceAsStream("/" + type.getName().replace('.', '/') + ".class")) {
+                assertNotNull(stream);
+                String actual = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(stream.readAllBytes()));
+                assertEquals(actual, classes.path(type.getName()).asText());
+            }
+        }
     }
 
     @Test

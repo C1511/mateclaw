@@ -12,6 +12,7 @@ import vip.mate.goal.config.GoalProperties;
 import vip.mate.goal.model.GoalCriteriaCodec;
 import vip.mate.goal.model.GoalCriterion;
 import vip.mate.goal.model.GoalEntity;
+import vip.mate.goal.model.GoalEvaluationResult;
 import vip.mate.goal.service.GoalEvaluationService;
 import vip.mate.llm.chatmodel.ProviderChatModelFactory;
 import vip.mate.llm.model.ModelConfigEntity;
@@ -24,6 +25,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -47,7 +50,7 @@ final class OfflineGoalTaskReplay {
     record CaseResult(String id, String task, String source, String boundary, Expected expected,
                       Actual actual, boolean matched, String error) { }
     record Report(int schemaVersion, String suiteId, String suiteSha256, String codeRevision,
-                  String executionMode, int onlineModelCalls, String agentTaskSuccessRate,
+                  String revisionSource, Map<String, String> executedClassSha256, String executionMode, int onlineModelCalls, String agentTaskSuccessRate,
                   String onlineCost, int matchedCases, int mismatchedCases, List<CaseResult> cases) { }
 
     static Suite parse(byte[] bytes) throws IOException {
@@ -103,7 +106,15 @@ final class OfflineGoalTaskReplay {
             }
         }
         int matched = (int) results.stream().filter(CaseResult::matched).count();
-        return new Report(1, suite.suiteId(), digest(bytes), revision, MODE, 0,
+        Map<String, String> classes = new LinkedHashMap<>();
+        for (Class<?> type : List.of(GoalEvaluationService.class, GoalCriteriaCodec.class,
+                GoalCriterion.class, GoalEvaluationResult.class)) {
+            try (var stream = type.getResourceAsStream("/" + type.getName().replace('.', '/') + ".class")) {
+                if (stream == null) throw new IOException("Missing tested class " + type.getName());
+                classes.put(type.getName(), digest(stream.readAllBytes()));
+            }
+        }
+        return new Report(1, suite.suiteId(), digest(bytes), revision, "caller_supplied_label", classes, MODE, 0,
                 "not_measured", "not_measured", matched, results.size() - matched, List.copyOf(results));
     }
 
