@@ -151,3 +151,47 @@ files and the production recipe; it does not exercise HTTP authorization or a
 browser. Those boundaries have separate service/UI regressions. Its mode is
 `offline_platform_fixture_jsoncheck`; online calls are zero and Agent success
 rate/online cost remain `not_measured`.
+
+## H2 Goal service scenarios
+
+`goal-service-boundaries-v1.json` adds six service workflows from the real
+completion/append/pause/bootstrap/definition-edit regressions. Run:
+
+```sh
+mvn -pl mateclaw-server -am -Dtest=OfflineGoalServiceTaskReplayTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dgoal.service.eval.revision="$(git rev-parse HEAD)" test
+```
+
+Output: `mateclaw-server/target/agent-evaluation/goal-service-baseline.json`.
+`goal.service.eval.suite` and `goal.service.eval.report` accept absolute paths.
+The runner uses the actual Spring transactional Goal service and a fresh H2
+MySQL-compatibility database with Flyway migrations. This is **not** a real
+MySQL/Kingbase run. It disables the autonomous Goal scheduler and supplies
+fixed evaluator results; no task-solving Agent or model is invoked. The external
+`MemoryManager` boundary is explicitly mocked so completion cannot sync to
+configured memory providers. Plugin loading is disabled and skill workspace
+reads use a temporary root; the Goal service, repositories and H2 remain real.
+The report lists this mocked boundary, rather than calling the entire app real.
+
+Expected fields describe persisted status, score, criterion counts and first
+text, evaluation-definition revision, recorded evaluator usage and completion
+outcome. Completion code `0` means not attempted, `200` means the existing
+semantic completion service accepted the fixture, and `409` means it rejected
+the transition. A semantic completion is not execution-required acceptance.
+`recordedEvalCallsUsed` exercises bookkeeping with fixture deltas; it is not a
+count of online calls. The entire suite is validated before any service write;
+conversations use generated IDs and fixture input cannot supply SQL or paths.
+
+Reports include suite and named production class hashes, the actual database
+product and latest applied Flyway version. These identify selected build/schema
+facts, not the entire runtime. Mismatches preserve all case results and fail the
+CLI. `goal-service-baseline-v1.json` is the initial six-case baseline.
+
+The four suites now contain **30 fixed scenarios**: ten synthetic evaluator
+responses, eight platform artifact IO scenarios, six JSON artifact checks and
+six H2 Goal service workflows. They are different execution modes and include
+related regression boundaries; do not treat them as 30 independent online
+Agent task attempts. Online calls remain zero, and online cost/Agent success
+rate remain `not_measured`. HTTP authorization, browser flows and distributed
+owner/scope fences are not exercised by the H2 replay.
