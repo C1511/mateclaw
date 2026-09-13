@@ -203,3 +203,10 @@ related regression boundaries; do not treat them as 30 independent online
 Agent task attempts. Online calls remain zero, and online cost/Agent success
 rate remain `not_measured`. HTTP authorization, browser flows and distributed
 owner/scope fences are not exercised by the H2 replay.
+
+
+All four suite parsers reject duplicate JSON keys at every nesting level, before
+running any case. This includes duplicate `schemaVersion` and keys inside
+`expected`, even if the duplicate values agree. Correct the input rather than
+relying on last-value-wins parsing. The four parser regression inputs are schema
+checks, not additional task scenarios; the fixed task count remains 30.

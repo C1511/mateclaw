@@ -15,7 +15,7 @@ import java.util.*;
 
 /** Fixed service transitions on a real test database; evaluation results are fixtures, not model calls. */
 final class OfflineGoalServiceTaskReplay {
-    static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+    static final ObjectMapper JSON = new ObjectMapper().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS);
     enum Operation { CURRENT_REVISION_COMPLETION, APPEND_BEFORE_VERDICT, PAUSE_BEFORE_VERDICT,
         APPEND_BEFORE_BOOTSTRAP, REPLACE_DEFINITION, ABA_DEFINITION }

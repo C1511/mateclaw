@@ -23,7 +23,7 @@ import java.util.Objects;
 
 /** Runs allowlisted platform actions on temporary files. No model, shell command or user path is executed. */
 final class OfflineArtifactTaskReplay {
-    static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+    static final ObjectMapper JSON = new ObjectMapper().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS);
     enum Operation { REGISTER, MUTATE_INPUT, MUTATE_DOWNLOAD, RESTART_MUTATE_DOWNLOAD,
         STORAGE_UNAVAILABLE, DIRECT_RETURN, MISSING_OWNER, REWRITE_DISK }

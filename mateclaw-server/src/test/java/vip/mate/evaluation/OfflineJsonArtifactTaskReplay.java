@@ -15,7 +15,7 @@ import java.util.*;
 
 /** Fixed platform IO/recipe replay. Does not call HTTP, a model, a shell or an Agent. */
 final class OfflineJsonArtifactTaskReplay {
-    static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+    static final ObjectMapper JSON = new ObjectMapper().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS);
     enum Operation { CHECK, REWRITE_DISK, TOO_SMALL_BUDGET, FOREIGN_OWNER }
     enum Status { MATCH, MISSING_FIELDS, INVALID_JSON, UNKNOWN, STALE, UNAVAILABLE }

@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 
 /** Offline policy replay. The model is a fixture: no agent task is actually executed. */
 final class OfflineGoalTaskReplay {
-    static final ObjectMapper JSON = new ObjectMapper()
+    static final ObjectMapper JSON = new ObjectMapper().enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     static final String MODE = "offline_synthetic_evaluator_replay";
 
