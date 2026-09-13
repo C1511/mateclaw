@@ -378,7 +378,10 @@ public class GoalServiceImpl implements GoalService {
     }
 
     private GoalEntity completeGoal(Long id, GoalEvaluationResult result, boolean evaluated) {
+        boolean[] transitioned = {false};
         GoalEntity g = retryOptimistic(id, "markCompleted", fresh -> {
+            // A failed CAS may retry against another worker's completed row.
+            transitioned[0] = false;
             if (fresh.getStatus().isTerminal()) {
                 if (evaluated && fresh.getStatus() != GoalStatus.COMPLETED) {
                     throw new MateClawException("err.goal.completion_not_verified", 409,
@@ -416,8 +419,10 @@ public class GoalServiceImpl implements GoalService {
                 w.set(GoalEntity::getCriteria, GoalCriteriaCodec.serialize(allPassed, objectMapper));
             }
             bumpVersionAndTime(w);
+            transitioned[0] = true;
             return w;
         });
+        if (!transitioned[0]) return g;
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("finalScore", result != null ? result.score() : null);
         detail.put("agentLlmCallsUsed", g.getAgentLlmCallsUsed());

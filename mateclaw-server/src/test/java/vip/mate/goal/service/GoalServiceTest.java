@@ -37,6 +37,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -514,11 +516,27 @@ class GoalServiceTest {
 
     @Test
     void markCompleted_isIdempotent_onTerminal() {
+        var memory = mock(vip.mate.memory.spi.MemoryManager.class);
+        service.setMemoryManager(memory);
         GoalEntity g = persisted(1L, GoalStatus.COMPLETED);
         when(goalMapper.selectById(1L)).thenReturn(g);
         GoalEntity result = service.markCompleted(1L, null);
         assertEquals(GoalStatus.COMPLETED, result.getStatus());
         verify(goalMapper, never()).update(any(), any(LambdaUpdateWrapper.class));
+        verifyNoInteractions(eventMapper, auditEventService, memory);
+    }
+
+    @Test
+    void completionCasLoserDoesNotRepeatWinnerSideEffects() {
+        var memory = mock(vip.mate.memory.spi.MemoryManager.class);
+        service.setMemoryManager(memory);
+        GoalEntity active = persisted(1L, GoalStatus.ACTIVE);
+        GoalEntity completed = statusFlipped(active, GoalStatus.COMPLETED);
+        when(goalMapper.selectById(1L)).thenReturn(active, completed);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0);
+        assertEquals(GoalStatus.COMPLETED, service.markCompleted(1L, null).getStatus());
+        verify(goalMapper, times(1)).update(any(), any(LambdaUpdateWrapper.class));
+        verifyNoInteractions(eventMapper, auditEventService, memory);
     }
 
     @Test

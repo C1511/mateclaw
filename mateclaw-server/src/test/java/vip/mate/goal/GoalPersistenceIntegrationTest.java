@@ -4,6 +4,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import vip.mate.memory.spi.MemoryManager;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -57,10 +59,12 @@ import static org.junit.jupiter.api.Assertions.fail;
         "spring.datasource.url=jdbc:h2:mem:goal_persistence_${random.uuid};MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
         "spring.ai.dashscope.api-key=test-key",
         "spring.main.web-application-type=none",
-        "mateclaw.goal.enabled=false"
+        "mateclaw.goal.enabled=false", "mateclaw.plugin.enabled=false", "mateclaw.skill.workspace.auto-init=false",
+        "mateclaw.skill.workspace.root=${java.io.tmpdir}/mateclaw-goal-persistence-skills-${random.uuid}"
 })
 class GoalPersistenceIntegrationTest {
 
+    @MockBean private MemoryManager memory;
     @Autowired private GoalService goalService;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private GoalContinuationStore continuations;
@@ -196,6 +200,33 @@ class GoalPersistenceIntegrationTest {
         org.junit.jupiter.api.Assertions.assertFalse(criteria.getFirst().passed());
         assertEquals("", criteria.getFirst().evidence());
         assertEquals(1L, saved.getEvaluationRevision());
+    }
+
+    @Test
+    void repeatedCompletionWritesOneEventAndSyncsMemoryOnce() {
+        GoalEntity goal = goalService.create(req("completion-event-idempotence", "report"), "alice");
+        goalService.appendCriterion(goal.getId(), "report", "alice");
+        var passed = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict("C1", true, "report evidence")), null);
+        goalService.recordEvaluation(goal.getId(), passed, 0, 1);
+        goalService.markEvaluatedCompleted(goal.getId(), passed);
+        goalService.markEvaluatedCompleted(goal.getId(), passed);
+        goalService.markCompleted(goal.getId(), null);
+        assertEquals(1L, goalService.listEvents(goal.getId(), 30).stream()
+                .filter(event -> "completed".equals(event.getEventType())).count());
+        org.mockito.Mockito.verify(memory, org.mockito.Mockito.times(1)).syncAll(
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(goal.getConversationId()),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void abandonedGoalCannotBeRecordedAsCompletedByAnIdempotentCall() {
+        GoalEntity goal = goalService.create(req("abandoned-no-completion-event", "report"), "alice");
+        goalService.abandon(goal.getId(), "alice");
+        assertEquals(GoalStatus.ABANDONED, goalService.markCompleted(goal.getId(), null).getStatus());
+        assertEquals(0L, goalService.listEvents(goal.getId(), 30).stream()
+                .filter(event -> "completed".equals(event.getEventType())).count());
+        org.mockito.Mockito.verifyNoInteractions(memory);
     }
 
     @Test
