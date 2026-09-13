@@ -48,7 +48,16 @@ async function load(more = false) {
     if (request !== generation) return
     const failure = error as { code?: number; response?: { status?: number } }
     const code = failure.response?.status ?? failure.code
-    errorKey.value = code === 401 || code === 403 ? 'executionEvidence.accessError' : 'executionEvidence.loadError'
+    const denied = code === 401 || code === 403 || code === 404
+    if (denied) {
+      items.value = []
+      nextCursor.value = null
+      loaded.value = false
+      detailLoading.value = {}
+      detailErrors.value = {}
+      clearChecks()
+    }
+    errorKey.value = denied ? 'executionEvidence.accessError' : 'executionEvidence.loadError'
   } finally {
     if (request === generation) loading.value = false
   }

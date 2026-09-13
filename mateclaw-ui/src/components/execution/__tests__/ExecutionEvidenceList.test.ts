@@ -34,6 +34,29 @@ describe('execution evidence', () => {
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('permission')
   expect(host.textContent).not.toContain('No execution evidence')
  })
+ it.each([[401, false], [403, true], [404, false]])('clears prior evidence after a denied list request (%s, more=%s)', async (code, more) => {
+  vi.mocked(executionEvidenceApi.list).mockResolvedValueOnce({ data: { items: [{ ...row('old'), summary: 'previous sensitive evidence' }], nextCursor: 'next' } } as never)
+    .mockRejectedValueOnce({ code })
+    .mockResolvedValueOnce({ data: { items: [row('restored')], nextCursor: null } } as never)
+  const { host } = mount(); host.querySelector<HTMLButtonElement>('[data-evidence-toggle]')!.click(); await flush()
+  const button = more ? host.querySelector<HTMLButtonElement>('[data-evidence-more]')!
+    : host.querySelector<HTMLButtonElement>('.execution-evidence__body > button')!
+  button.click(); await flush()
+  expect(host.querySelectorAll('[data-evidence-item]')).toHaveLength(0)
+  expect(host.textContent).not.toContain('previous sensitive evidence')
+  expect(host.querySelector('[data-evidence-more]')).toBeNull()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('permission')
+  host.querySelector<HTMLButtonElement>('.execution-evidence__body > button')!.click(); await flush()
+  expect(host.querySelector('[data-evidence-item]')?.getAttribute('data-evidence-item')).toBe('restored')
+ })
+ it('keeps the last loaded page for retry after a transient list error', async () => {
+  vi.mocked(executionEvidenceApi.list).mockResolvedValueOnce({ data: { items: [row('old')], nextCursor: 'next' } } as never)
+    .mockRejectedValueOnce({ response: { status: 500 } })
+  const { host } = mount(); host.querySelector<HTMLButtonElement>('[data-evidence-toggle]')!.click(); await flush()
+  host.querySelector<HTMLButtonElement>('.execution-evidence__body > button')!.click(); await flush()
+  expect(host.querySelector('[data-evidence-item]')?.getAttribute('data-evidence-item')).toBe('old')
+  expect(host.querySelector('[data-evidence-more]')).not.toBeNull()
+ })
  it('ignores a stale response after the selected conversation changes', async () => {
   let resolve!: (value: unknown) => void
   vi.mocked(executionEvidenceApi.list).mockImplementationOnce(() => new Promise(r => { resolve = r }) as never).mockResolvedValueOnce({ data: { items: [row('new')], nextCursor: null } } as never)
