@@ -665,6 +665,31 @@ class GoalServiceTest {
         assertFalse(setsProperty(writes.getAllValues().get(1), "criteria"), "retry must not replace newly established criteria");
     }
 
+    @Test
+    void verdictProgressRecomputesAfterCasConflict() {
+        GoalEntity original = persisted(1L, GoalStatus.ACTIVE);
+        original.setCriteria("[{\"id\":\"C1\",\"text\":\"report\",\"passed\":false,\"evidence\":\"\"}]");
+        GoalEntity fresh = persisted(1L, GoalStatus.ACTIVE);
+        fresh.setVersion(1);
+        fresh.setCriteria("[{\"id\":\"C1\",\"text\":\"report\",\"passed\":false,\"evidence\":\"\"},"
+                + "{\"id\":\"C2\",\"text\":\"appendix\",\"passed\":false,\"evidence\":\"\"}]");
+        when(goalMapper.selectById(1L)).thenReturn(original, original, fresh, fresh);
+        when(goalMapper.update(any(), any(LambdaUpdateWrapper.class))).thenReturn(0, 1);
+        var result = new GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict(
+                        "C1", true, "report written")), null);
+        service.recordEvaluation(1L, result, 2, 1);
+        ArgumentCaptor<LambdaUpdateWrapper> writes = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(goalMapper, times(2)).update(any(), writes.capture());
+        var first = writes.getAllValues().getFirst();
+        var retry = writes.getAllValues().getLast();
+        assertTrue(setsProperty(first, "completionScore"));
+        assertTrue(setsProperty(retry, "completionScore"));
+        assertTrue(first.getParamNameValuePairs().containsValue(1.0));
+        assertTrue(retry.getParamNameValuePairs().containsValue(0.5));
+        assertTrue(retry.getParamNameValuePairs().containsValue("Still missing: appendix"));
+    }
+
     // ==================== criteria checklist ====================
 
     @Test

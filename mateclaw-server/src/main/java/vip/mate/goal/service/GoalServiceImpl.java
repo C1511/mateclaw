@@ -473,14 +473,27 @@ public class GoalServiceImpl implements GoalService {
             // persistent pause/input boundary established while the call ran.
             if (result != null && (!Boolean.TRUE.equals(fresh.getPersistentExecution())
                     || fresh.getStatus() == GoalStatus.ACTIVE)) {
-                w.set(GoalEntity::getCompletionScore, result.score())
-                 .set(GoalEntity::getProgressSummary, result.gap());
                 // Persist the checklist by carrier: bootstrap writes the fresh
                 // draft; verdict merges the per-criterion delta into the
                 // current list (re-read on the locked `fresh` to avoid races).
                 String criteriaJson = nextCriteriaJson(fresh, result);
                 if (criteriaJson != null) {
                     w.set(GoalEntity::getCriteria, criteriaJson);
+                }
+                List<GoalCriterion> current = GoalCriteriaCodec.parse(
+                        criteriaJson != null ? criteriaJson : fresh.getCriteria(), objectMapper);
+                if (!current.isEmpty() && !GoalEvaluationResult.DECISION_FALLBACK.equals(result.decision())) {
+                    // The model may have seen fewer criteria. Derive the public
+                    // projection from the same fresh checklist this CAS writes.
+                    List<GoalCriterion> remaining = GoalCriteriaCodec.remaining(current);
+                    double score = (double) (current.size() - remaining.size()) / current.size();
+                    String gap = remaining.isEmpty() ? "" : "Still missing: " + remaining.stream()
+                            .map(GoalCriterion::text).collect(java.util.stream.Collectors.joining("; "));
+                    w.set(GoalEntity::getCompletionScore, score)
+                     .set(GoalEntity::getProgressSummary, gap);
+                } else {
+                    w.set(GoalEntity::getCompletionScore, result.score())
+                     .set(GoalEntity::getProgressSummary, result.gap());
                 }
             }
             bumpVersionAndTime(w);
@@ -489,9 +502,11 @@ public class GoalServiceImpl implements GoalService {
 
         Map<String, Object> detail = new LinkedHashMap<>();
         if (result != null) {
-            detail.put("completionScore", result.score());
-            detail.put("gap", result.gap());
+            detail.put("completionScore", g.getCompletionScore());
+            detail.put("gap", g.getProgressSummary());
             detail.put("decision", result.decision());
+            detail.put("evaluatorScore", result.score());
+            detail.put("evaluatorGap", result.gap());
             detail.put("evaluatorModel", result.evaluatorModel());
             detail.put("latencyMs", result.latencyMs());
         }

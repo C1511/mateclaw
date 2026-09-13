@@ -96,6 +96,30 @@ class GoalPersistenceIntegrationTest {
     }
 
     @Test
+    void lateVerdictProjectsProgressFromCurrentChecklist() throws Exception {
+        GoalEntity created = goalService.create(req("late-verdict-current-progress", "prepare a report"), "alice");
+        goalService.appendCriterion(created.getId(), "write the report", "alice");
+        // The model evaluated only C1. A second condition commits before the result.
+        goalService.appendCriterion(created.getId(), "include an appendix", "alice");
+        var delayed = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true,
+                "fixture", 1, 0, java.util.List.of(
+                new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict("C1", true, "report written")), null);
+        goalService.recordEvaluation(created.getId(), delayed, 2, 1);
+        GoalEntity saved = goalService.getById(created.getId());
+        assertEquals(0.5, saved.getCompletionScore());
+        var event = goalService.listEvents(created.getId(), 20).stream()
+                .filter(e -> "evaluated".equals(e.getEventType())).findFirst().orElseThrow();
+        var detail = new com.fasterxml.jackson.databind.ObjectMapper().readTree(event.getDetailJson());
+        assertEquals(0.5, detail.get("completionScore").asDouble());
+        assertEquals(1.0, detail.get("evaluatorScore").asDouble());
+        org.junit.jupiter.api.Assertions.assertTrue(detail.get("gap").asText().contains("include an appendix"));
+        org.junit.jupiter.api.Assertions.assertTrue(saved.getProgressSummary().contains("include an appendix"));
+        assertEquals(GoalStatus.ACTIVE, saved.getStatus());
+        assertEquals(1, saved.getEvalLlmCallsUsed());
+        assertThrows(MateClawException.class, () -> goalService.markEvaluatedCompleted(created.getId(), delayed));
+    }
+
+    @Test
     @DisplayName("GoalStatus values persist as lowercase literals — load-bearing for uk_agent_goal_active_conv")
     void status_persistsAsLowercaseString() {
         GoalEntity created = goalService.create(req("conv-status-1", "lower-case check"), "alice");
