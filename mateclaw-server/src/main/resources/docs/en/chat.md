@@ -116,7 +116,8 @@ Images, audio/video and 3D models always previewed inline — but a Word report 
 - **Click to preview**: pdf / docx / xlsx / html / markdown / txt / code files open in a glass-styled preview layer from the attachment card — uploaded and AI-generated alike.
 - **Pure client-side rendering**: PDF, Word and Excel parse and render in the browser — nothing leaves your machine, no external preview service, the single-JAR and desktop packaging story is unchanged.
 - **Server fallback for the stubborn formats**: pptx and legacy binary Office (doc / xls / ppt) are converted to PDF server-side before preview; if the converter (LibreOffice) isn't present, they degrade gracefully to download — no error, no hang.
-- **Safe HTML preview**: rendered in a sandboxed iframe — interactive pages and charts fully work (scripts run), but the iframe sits in an opaque origin and cannot read the app's login state or local storage.
+- **In-chat HTML preview**: HTML fetched with authorization is rendered in an opaque-origin sandboxed iframe. Scripts are allowed to support interactive pages and charts; app same-origin privileges are not granted. This does not guarantee compatibility with every script, network resource, or browser.
+- **Direct generated-file viewing**: opening an HTML/SVG response from `/api/v1/files/generated/{id}` uses a stricter policy: scripts and forms are blocked, with permitted static styles and media retained. Use the in-chat HTML preview for pages that depend on JavaScript; these two viewing paths have different policies.
 
 ### Primary model can't see images? "Multimodal sidecar" routing
 
