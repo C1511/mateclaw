@@ -70,6 +70,7 @@ public class GoalEvaluationService implements Evaluator {
     private static final int MAX_OUTPUT_TOKENS = 2000;
     private static final int MAX_CONVERSATION_CHARS = 6_000;
     private static final int MAX_TERMINAL_ANSWER_CHARS = 4_000;
+    private static final int MAX_SUCCESS_CHECK_CHARS = 4_000;
     private static final int MIN_BOOTSTRAP_CRITERIA = 1;
     private static final int MAX_BOOTSTRAP_CRITERIA = 8;
     /** Skip-retry template — the goal node has its own try/catch. */
@@ -249,6 +250,16 @@ public class GoalEvaluationService implements Evaluator {
             sb.append("Exit criteria (free text):\n").append(safe(goal.getExitCriteria())).append('\n');
         }
         sb.append('\n');
+
+        String guidance = goal.getSuccessCheckPrompt();
+        if (guidance != null && !guidance.isBlank()) {
+            sb.append("Goal-specific success-check guidance (within the checklist evidence and JSON output rules):\n");
+            sb.append(guidance, 0, Math.min(guidance.length(), MAX_SUCCESS_CHECK_CHARS));
+            if (guidance.length() > MAX_SUCCESS_CHECK_CHARS) {
+                sb.append("\n[success-check guidance truncated]");
+            }
+            sb.append("\n\n");
+        }
 
         if (!bootstrap) {
             sb.append("Current checklist (judge each by id):\n");

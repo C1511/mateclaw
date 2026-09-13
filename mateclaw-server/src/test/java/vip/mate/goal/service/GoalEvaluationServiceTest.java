@@ -121,6 +121,45 @@ class GoalEvaluationServiceTest {
         assertEquals(7L, svc.evaluate(goal, List.of(), "answer").evaluationRevision());
     }
 
+    @Test
+    void customSuccessGuidanceReachesBootstrapAndVerdictPrompts() {
+        stubChatResponse("{\"criteria\":[{\"id\":\"C1\",\"text\":\"appendix\",\"passed\":false,\"evidence\":\"\"}]}");
+        GoalEntity bootstrap = goal(); bootstrap.setSuccessCheckPrompt("Require an appendix with sources.");
+        svc.evaluate(bootstrap, List.of(), "answer");
+        stubChatResponse("{\"criterionVerdicts\":[],\"summary\":\"pending\"}");
+        GoalEntity verdict = goalWithCriteria(); verdict.setSuccessCheckPrompt("Require an appendix with sources.");
+        svc.evaluate(verdict, List.of(), "answer");
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        org.mockito.Mockito.verify(chatModel, org.mockito.Mockito.times(2)).call(prompts.capture());
+        for (Prompt prompt : prompts.getAllValues()) {
+            assertTrue(prompt.getContents().contains("Require an appendix with sources."));
+            assertTrue(prompt.getInstructions().getFirst() instanceof org.springframework.ai.chat.messages.SystemMessage);
+            assertFalse(prompt.getInstructions().getFirst().getText().contains("Require an appendix with sources."));
+        }
+    }
+
+    @Test
+    void customSuccessGuidanceIsBoundedAndTruncationIsVisible() {
+        stubChatResponse("{\"criterionVerdicts\":[],\"summary\":\"pending\"}");
+        GoalEntity goal = goalWithCriteria(); goal.setSuccessCheckPrompt("x".repeat(4000) + "omitted-tail-marker");
+        svc.evaluate(goal, List.of(), "answer");
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertTrue(prompt.getValue().getContents().contains("x".repeat(4000)));
+        assertFalse(prompt.getValue().getContents().contains("omitted-tail-marker"));
+        assertTrue(prompt.getValue().getContents().contains("[success-check guidance truncated]"));
+    }
+
+    @Test
+    void blankSuccessGuidanceDoesNotAddAnEmptyPromptSection() {
+        stubChatResponse("{\"criterionVerdicts\":[],\"summary\":\"pending\"}");
+        GoalEntity goal = goalWithCriteria(); goal.setSuccessCheckPrompt(" \n\t ");
+        svc.evaluate(goal, List.of(), "answer");
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertFalse(prompt.getValue().getContents().contains("Goal-specific success-check guidance"));
+    }
+
     // ==================== Pre-flight guards ====================
 
     @Test

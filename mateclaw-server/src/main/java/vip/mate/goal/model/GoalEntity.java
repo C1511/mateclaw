@@ -60,7 +60,7 @@ public class GoalEntity {
     @TableField(value = "exit_criteria", updateStrategy = FieldStrategy.ALWAYS)
     private String exitCriteria;
 
-    /** Optional per-goal evaluator prompt override; nullable -> default. */
+    /** Optional evaluation guidance; does not replace platform evidence/output rules. */
     @TableField(value = "success_check_prompt", updateStrategy = FieldStrategy.ALWAYS)
     private String successCheckPrompt;
 
