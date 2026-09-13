@@ -279,39 +279,35 @@ public class GeneratedFileCache {
      * JVM restarts; expired entries are removed as a side-effect.
      */
     public Optional<Entry> get(String id) {
+        return Optional.ofNullable(getAuthorized(id, owner -> true).entry());
+    }
+
+    public enum AccessStatus { FOUND, FORBIDDEN, MISSING }
+    public record AccessResult(AccessStatus status, @Nullable Entry entry) { }
+
+    /** Authorize ownership metadata before reading or caching a cold content body. */
+    public AccessResult getAuthorized(String id, java.util.function.Predicate<Owner> authorized) {
+        Objects.requireNonNull(authorized, "authorized");
         if (id == null || !ID_RE.matcher(id).matches()) {
-            return Optional.empty();
+            return new AccessResult(AccessStatus.MISSING, null);
         }
-        Entry entry = entries.get(id);
-        if (entry == null) {
-            entry = loadFromDisk(id);
-            if (entry != null) {
-                entries.put(id, entry);
+        Entry cached = entries.get(id);
+        if (cached != null) {
+            if (cached.expired()) {
+                evict(id);
+                return new AccessResult(AccessStatus.MISSING, null);
             }
+            return authorized.test(new Owner(cached.workspaceId(), cached.ownerUserId(), cached.conversationId()))
+                    ? new AccessResult(AccessStatus.FOUND, cached) : new AccessResult(AccessStatus.FORBIDDEN, null);
         }
-        if (entry == null) {
-            return Optional.empty();
-        }
-        if (entry.expired()) {
-            evict(id);
-            return Optional.empty();
-        }
-        return Optional.of(entry);
+        AccessResult loaded = loadAuthorizedFromDisk(id, authorized);
+        if (loaded.entry() != null) entries.put(id, loaded.entry());
+        return loaded;
     }
 
     public Optional<Entry> getForWorkspace(String id, @Nullable Long workspaceId) {
-        Optional<Entry> entry = get(id);
-        if (entry.isEmpty()) {
-            return Optional.empty();
-        }
-        Long ownerWorkspaceId = entry.get().workspaceId();
-        if (ownerWorkspaceId == null) {
-            return entry;
-        }
-        if (workspaceId == null || !ownerWorkspaceId.equals(workspaceId)) {
-            return Optional.empty();
-        }
-        return entry;
+        return Optional.ofNullable(getAuthorized(id, owner -> owner.workspaceId() == null
+                || Objects.equals(owner.workspaceId(), workspaceId)).entry());
     }
 
     /**
@@ -503,29 +499,53 @@ public class GeneratedFileCache {
     }
 
     private Entry loadFromDisk(String id) {
+        return loadAuthorizedFromDisk(id, owner -> true).entry();
+    }
+
+    private AccessResult loadAuthorizedFromDisk(String id, java.util.function.Predicate<Owner> authorized) {
+        AccessResult missing = new AccessResult(AccessStatus.MISSING, null);
         Path bin = storageDir.resolve(id).normalize();
         Path meta = storageDir.resolve(id + META_SUFFIX).normalize();
-        // Containment guard — id is already validated, this is defence in depth.
+        // NOFOLLOW also applies at open; parent-directory ownership is separate.
         if (!bin.startsWith(storageDir) || !Files.isRegularFile(bin, LinkOption.NOFOLLOW_LINKS)
-                || !Files.isRegularFile(meta, LinkOption.NOFOLLOW_LINKS)) {
-            return null;
+                || !Files.isRegularFile(meta, LinkOption.NOFOLLOW_LINKS)) return missing;
+        Metadata before;
+        try {
+            before = readDownloadMetadata(meta, id);
+        } catch (IOException | RuntimeException e) {
+            log.debug("Could not read generated file metadata id={}: {}", id, e.toString());
+            return missing;
+        }
+        if (before.expireAt() <= System.currentTimeMillis()) {
+            evict(id);
+            return missing;
+        }
+        // Keep permission-provider errors distinct from unavailable storage.
+        if (!authorized.test(new Owner(before.workspaceId(), before.ownerUserId(), before.conversationId()))) {
+            return new AccessResult(AccessStatus.FORBIDDEN, null);
         }
         try {
-            // Refuse leaf symlinks again at open, including replacement after the
-            // regular-file check. Parent-directory ownership is a separate boundary.
-            Metadata parsed;
-            try (var input = Files.newInputStream(meta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
-                parsed = parseMeta(new String(input.readAllBytes(), StandardCharsets.UTF_8), id);
-            }
+            // Authorization can take time. Refuse observed metadata replacement
+            // before opening the body and again before making it available.
+            if (!before.equals(readDownloadMetadata(meta, id))) return missing;
             byte[] bytes;
             try (var input = Files.newInputStream(bin, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
                 bytes = input.readAllBytes();
             }
-            return new Entry(bytes, parsed.filename(), parsed.mimeType(), parsed.expireAt(),
-                    parsed.workspaceId(), parsed.ownerUserId(), parsed.conversationId());
-        } catch (Exception e) {
-            log.warn("Could not load generated file id={}: {}", id, e.toString());
-            return null;
+            if (!before.equals(readDownloadMetadata(meta, id))
+                    || before.expireAt() <= System.currentTimeMillis()) return missing;
+            Entry entry = new Entry(bytes, before.filename(), before.mimeType(), before.expireAt(),
+                    before.workspaceId(), before.ownerUserId(), before.conversationId());
+            return new AccessResult(AccessStatus.FOUND, entry);
+        } catch (IOException | RuntimeException e) {
+            log.debug("Could not load generated file id={}: {}", id, e.toString());
+            return missing;
+        }
+    }
+
+    private Metadata readDownloadMetadata(Path meta, String id) throws IOException {
+        try (var input = Files.newInputStream(meta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            return parseMeta(new String(input.readAllBytes(), StandardCharsets.UTF_8), id);
         }
     }
 

@@ -21,6 +21,16 @@ import static org.junit.jupiter.api.Assertions.*;
 class GeneratedFileCachePersistenceTest {
 
     @Test
+    void forbiddenWorkspaceLookupDoesNotPopulateColdCache(@TempDir Path dir) {
+        String id = new GeneratedFileCache(dir).put("body".getBytes(StandardCharsets.UTF_8), "report.txt", "text/plain",
+                new GeneratedFileCache.Owner(20L, 30L, "conv"));
+        GeneratedFileCache cold = new GeneratedFileCache(dir);
+        assertTrue(cold.getForWorkspace(id, 40L).isEmpty());
+        assertTrue(((java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(cold, "entries")).isEmpty());
+        assertTrue(cold.getForWorkspace(id, 20L).isPresent());
+    }
+
+    @Test
     void coldDownloadRejectsSymbolicLinkToExternalContent(@TempDir Path dir) throws IOException {
         Path storage = Files.createDirectory(dir.resolve("cache"));
         var cache = new GeneratedFileCache(storage);
