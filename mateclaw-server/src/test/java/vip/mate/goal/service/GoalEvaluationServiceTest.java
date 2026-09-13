@@ -94,6 +94,20 @@ class GoalEvaluationServiceTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(response);
     }
 
+    @Test
+    void blankEvidenceVerdictCannotCompleteOrInflateProgress() {
+        stubChatResponse("""
+                {"criterionVerdicts":[
+                  {"id":"C1","passed":true,"evidence":""},
+                  {"id":"C2","passed":true,"evidence":null}],"summary":"done"}
+                """);
+        var result = svc.evaluate(goalWithCriteria(), List.of(), "All done");
+        assertFalse(result.completed());
+        assertEquals(0.0, result.score());
+        assertTrue(result.gap().contains("DNS configured"));
+        assertTrue(result.gap().contains("TLS enabled"));
+    }
+
     // ==================== Pre-flight guards ====================
 
     @Test
