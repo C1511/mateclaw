@@ -19,6 +19,28 @@ import static org.junit.jupiter.api.Assertions.*;
 class GeneratedFileCachePersistenceTest {
 
     @Test
+    void callerCannotChangeRegisteredVersionThroughInputBytes(@TempDir Path dir) {
+        var cache = new GeneratedFileCache(dir);
+        byte[] input = "report-v1".getBytes(StandardCharsets.UTF_8);
+        String id = cache.put(input, "report.txt", "text/plain");
+        input[0] = 'X';
+        byte[] persisted = new GeneratedFileCache(dir).get(id).orElseThrow().bytes();
+        assertArrayEquals("report-v1".getBytes(StandardCharsets.UTF_8), persisted);
+        assertArrayEquals(persisted, cache.get(id).orElseThrow().bytes());
+    }
+
+    @Test
+    void callerCannotChangeRegisteredVersionThroughReturnedBytes(@TempDir Path dir) {
+        var cache = new GeneratedFileCache(dir);
+        String id = cache.put("report-v1".getBytes(StandardCharsets.UTF_8), "report.txt", "text/plain");
+        var returned = cache.get(id).orElseThrow();
+        returned.bytes()[0] = 'X';
+        byte[] persisted = new GeneratedFileCache(dir).get(id).orElseThrow().bytes();
+        assertArrayEquals(persisted, cache.get(id).orElseThrow().bytes());
+        assertArrayEquals(persisted, returned.bytes());
+    }
+
+    @Test
     @DisplayName("a link survives a 'restart' — a fresh cache over the same dir still serves it")
     void survivesRestart(@TempDir Path dir) {
         GeneratedFileCache first = new GeneratedFileCache(dir);

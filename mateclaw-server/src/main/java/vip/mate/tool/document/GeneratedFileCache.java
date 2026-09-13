@@ -155,6 +155,17 @@ public class GeneratedFileCache {
                         @Nullable Long ownerUserId,
                         @Nullable String conversationId) {
 
+        public Entry {
+            // A file id owns its registered bytes, independent of producer buffers.
+            bytes = bytes == null ? null : bytes.clone();
+        }
+
+        @Override
+        public byte[] bytes() {
+            // Download/consumer buffers must not mutate this cached version.
+            return bytes == null ? null : bytes.clone();
+        }
+
         public boolean expired() {
             return System.currentTimeMillis() > expireAt;
         }
@@ -179,10 +190,10 @@ public class GeneratedFileCache {
                     && owner.workspaceId().equals(durable.workspaceId())
                     && owner.conversationId().equals(durable.conversationId())
                     && Objects.equals(owner.ownerUserId(), durable.ownerUserId())
-                    && Arrays.equals(bytes, durable.bytes())) {
+                    && Arrays.equals(bytes, durable.bytes)) {
                 try {
-                    String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(durable.bytes()));
-                    sink.artifact(id, digest, durable.bytes().length, durable.mimeType(), Instant.ofEpochMilli(durable.expireAt()));
+                    String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(durable.bytes));
+                    sink.artifact(id, digest, durable.bytes.length, durable.mimeType(), Instant.ofEpochMilli(durable.expireAt()));
                 } catch (NoSuchAlgorithmException e) {
                     throw new IllegalStateException("SHA-256 is unavailable", e);
                 }
@@ -364,11 +375,11 @@ public class GeneratedFileCache {
     }
 
     private void persist(String id, Entry entry) {
-        if (entry.bytes() == null) {
+        if (entry.bytes == null) {
             return;
         }
         try {
-            Files.write(storageDir.resolve(id), entry.bytes());
+            Files.write(storageDir.resolve(id), entry.bytes);
             // expireAt \t mimeType \t base64(filename) \t workspaceId
             // \t ownerUserId \t base64(conversationId). Base64 keeps unicode and
             // separators round-trippable without custom escaping.

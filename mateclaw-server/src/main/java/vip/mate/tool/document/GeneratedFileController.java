@@ -73,8 +73,9 @@ public class GeneratedFileController {
                     headers.add(HttpHeaders.CONTENT_DISPOSITION,
                             disposition + "; filename=\"" + sanitizeAscii(entry.filename())
                                     + "\"; filename*=UTF-8''" + encodedName);
-                    headers.setContentLength(entry.bytes().length);
-                    return ResponseEntity.ok().headers(headers).body(entry.bytes());
+                    byte[] content = entry.bytes();
+                    headers.setContentLength(content.length);
+                    return ResponseEntity.ok().headers(headers).body(content);
                 })
                 .orElseGet(() -> cache.get(id).isPresent()
                         ? ResponseEntity.status(403).body(Map.of("error", "Workspace permission denied"))
