@@ -20,6 +20,7 @@ public final class ExecutionObservationSink {
     private final List<EvidenceObservation> observations = new ArrayList<>();
     private AttemptState state = AttemptState.SUCCEEDED;
     private boolean sealed;
+    private long commandCount;
 
     public ExecutionObservationSink(boolean metadataOnly) { this(metadataOnly, 32); }
 
@@ -52,15 +53,27 @@ public final class ExecutionObservationSink {
 
     public synchronized void command(Integer exitCode, boolean timedOut, boolean cancelled, boolean blocked, String workingDirectory) {
         if (sealed) return;
-        state = cancelled ? AttemptState.CANCELLED : timedOut || exitCode == null ? AttemptState.UNKNOWN
-                : blocked ? AttemptState.BLOCKED : exitCode == 0 ? AttemptState.SUCCEEDED : AttemptState.FAILED;
-        EvidenceResult result = state == AttemptState.SUCCEEDED ? EvidenceResult.OBSERVED
-                : state == AttemptState.UNKNOWN || state == AttemptState.CANCELLED
+        AttemptState commandState = cancelled ? AttemptState.CANCELLED : blocked ? AttemptState.BLOCKED
+                : timedOut || exitCode == null ? AttemptState.UNKNOWN
+                : exitCode == 0 ? AttemptState.SUCCEEDED : AttemptState.FAILED;
+        state = commandCount == 0 ? commandState : aggregate(state, commandState);
+        commandCount++;
+        EvidenceResult result = commandState == AttemptState.SUCCEEDED ? EvidenceResult.OBSERVED
+                : commandState == AttemptState.UNKNOWN || commandState == AttemptState.CANCELLED
                         ? EvidenceResult.UNKNOWN : EvidenceResult.FAIL;
-        append(new EvidenceObservation("command", EvidenceKind.COMMAND_EXIT, result,
+        append(new EvidenceObservation(commandCount == 1 ? "command" : "command:" + commandCount, EvidenceKind.COMMAND_EXIT, result,
                 SourceLevel.PLATFORM_OBSERVED, null, null, null, null, null, workingDirectory,
                 null, null, "exit=" + exitCode + "; timedOut=" + timedOut
                         + "; cancelled=" + cancelled + "; blocked=" + blocked, null, null, null));
+    }
+
+    private static AttemptState aggregate(AttemptState prior, AttemptState current) {
+        if (prior == AttemptState.CANCELLED || current == AttemptState.CANCELLED) return AttemptState.CANCELLED;
+        if (prior == AttemptState.UNKNOWN || current == AttemptState.UNKNOWN) return AttemptState.UNKNOWN;
+        if (prior == AttemptState.FAILED || current == AttemptState.FAILED) return AttemptState.FAILED;
+        if (prior == current) return prior;
+        // A blocked command mixed with actual execution cannot certify no effects.
+        return AttemptState.UNKNOWN;
     }
 
     /** Called only after file bytes and owner metadata have survived durable read-back. */

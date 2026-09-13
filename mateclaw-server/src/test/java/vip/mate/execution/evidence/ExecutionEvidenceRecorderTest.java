@@ -96,6 +96,55 @@ class ExecutionEvidenceRecorderTest {
         assertThrows(IllegalStateException.class, () -> new ExecutionEvidenceRecorder(store, identities, properties, new SimpleMeterRegistry()));
     }
 
+    @Test void multipleCommandsPreserveFailureAndDistinctObservations() {
+        when(callback.call(anyString(), any())).thenAnswer(call -> {
+            var sink = ExecutionObservationSink.from(call.getArgument(1));
+            sink.command(7, false, false, false);
+            sink.command(0, false, false, false);
+            return "last command succeeded";
+        });
+        assertEquals("last command succeeded", invoke());
+        verify(store).finish(eq(1L), eq("fence"), eq(AttemptState.FAILED), eq(EffectOutcome.UNCERTAIN),
+                argThat(rows -> rows.size() == 3 && rows.getFirst().result() == EvidenceResult.FAIL
+                        && rows.get(1).result() == EvidenceResult.OBSERVED
+                        && rows.getLast().result() == EvidenceResult.FAIL));
+    }
+
+    @Test void blockedAndExecutedCommandsCannotClaimNoSideEffects() {
+        when(callback.call(anyString(), any())).thenAnswer(call -> {
+            var sink = ExecutionObservationSink.from(call.getArgument(1));
+            sink.command(null, false, false, true);
+            sink.command(0, false, false, false);
+            return "partial execution";
+        });
+        assertEquals("partial execution", invoke());
+        verify(store).finish(eq(1L), eq("fence"), eq(AttemptState.UNKNOWN), eq(EffectOutcome.UNCERTAIN), anyList());
+    }
+
+    @Test void observationLimitAndSealDoNotEraseFailure() {
+        var sink = new ExecutionObservationSink(false, 1);
+        sink.command(0, false, false, false);
+        sink.command(7, false, false, false);
+        assertEquals(1, sink.observations().size());
+        assertEquals(AttemptState.FAILED, sink.state());
+        sink.seal();
+        sink.command(0, false, false, false);
+        assertEquals(AttemptState.FAILED, sink.state());
+        assertEquals(1, sink.observations().size());
+    }
+
+    @Test void laterSuccessPreservesTimeoutAndCancellationEvenForDirectResults() {
+        var timeout = new ExecutionObservationSink(true);
+        timeout.command(null, true, false, false);
+        timeout.command(0, false, false, false);
+        assertEquals(AttemptState.UNKNOWN, timeout.state());
+        assertTrue(timeout.observations().isEmpty());
+        var cancelled = new ExecutionObservationSink(false);
+        cancelled.command(null, false, true, false);
+        cancelled.command(0, false, false, false);
+        assertEquals(AttemptState.CANCELLED, cancelled.state());
+    }
+
     private String invoke() {
         return recorder.invoke(callback, "{}", ChatOrigin.web("conv", "owner", 1L, null).toToolContext(), "invocation", "provider-id");
     }

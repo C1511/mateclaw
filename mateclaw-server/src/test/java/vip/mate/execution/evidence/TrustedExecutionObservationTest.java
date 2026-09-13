@@ -105,6 +105,18 @@ class TrustedExecutionObservationTest {
         assertArrayEquals(new GeneratedFileCache(root.resolve("cache")).get(id).orElseThrow().bytes(), downloaded);
     }
 
+    @Test void laterSuccessfulProcessCannotEraseEarlierFailureInSameInvocation() {
+        var sink = new ExecutionObservationSink(false);
+        var ctx = context(sink);
+        shell().execute_shell_command("exit 7", 5, ctx);
+        shell().execute_shell_command("exit 0", 5, ctx);
+        assertEquals(AttemptState.FAILED, sink.state());
+        assertEquals(2, sink.observations().size());
+        assertEquals(EvidenceResult.FAIL, sink.observations().getFirst().result());
+        assertEquals(EvidenceResult.OBSERVED, sink.observations().getLast().result());
+        assertNotEquals(sink.observations().getFirst().sourceKey(), sink.observations().getLast().sourceKey());
+    }
+
     private ShellExecuteTool shell() {
         return new ShellExecuteTool(mock(I18nService.class), new GeneratedFileCache(root.resolve("cache")));
     }
