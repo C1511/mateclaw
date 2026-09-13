@@ -29,6 +29,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -267,6 +268,35 @@ class GoalEvaluationServiceTest {
         assertEquals(GoalEvaluationResult.DECISION_COMPLETED, r.decision());
         assertTrue(r.completed());
         assertEquals(1.0, r.score(), 1e-9);
+    }
+
+    @Test
+    void contradictoryDuplicateVerdictsCannotProduceCompletion() {
+        stubChatResponse("{\"criterionVerdicts\":["
+                + "{\"id\":\"C1\",\"passed\":false,\"evidence\":\"DNS missing\"},"
+                + "{\"id\":\"C1\",\"passed\":true,\"evidence\":\"DNS claimed ready\"},"
+                + "{\"id\":\"C2\",\"passed\":true,\"evidence\":\"TLS ready\"}],\"summary\":\"done\"}");
+        GoalEvaluationResult result = svc.evaluate(goalWithCriteria(), List.of(), "finished");
+        assertFalse(result.completed());
+        assertEquals(GoalEvaluationResult.DECISION_FALLBACK, result.decision());
+        assertEquals(1, result.llmCallsConsumed());
+        assertTrue(result.criterionVerdicts().isEmpty());
+    }
+
+    @Test
+    void duplicateJsonFieldsAreRejectedInVerdictAndBootstrap() {
+        for (boolean bootstrap : List.of(false, true)) {
+            stubChatResponse(bootstrap
+                    ? "{\"criteria\":[{\"text\":\"original requirement\",\"text\":\"replacement\"}]}"
+                    : "{\"criterionVerdicts\":[{\"id\":\"C1\",\"passed\":false,\"passed\":true,\"evidence\":\"claim\"},"
+                            + "{\"id\":\"C2\",\"passed\":true,\"evidence\":\"claim\"}]}");
+            GoalEvaluationResult result = svc.evaluate(bootstrap ? goal() : goalWithCriteria(), List.of(), "finished");
+            assertEquals(GoalEvaluationResult.DECISION_FALLBACK, result.decision());
+            assertFalse(result.completed());
+            assertEquals(1, result.llmCallsConsumed());
+            assertTrue(result.criterionVerdicts().isEmpty());
+            assertNull(result.bootstrapCriteria());
+        }
     }
 
     // ==================== Parser tolerance ====================

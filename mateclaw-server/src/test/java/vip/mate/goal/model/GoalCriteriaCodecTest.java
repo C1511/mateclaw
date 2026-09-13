@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Pure unit tests for the checklist (de)serialization + merge helpers.
@@ -49,6 +50,17 @@ class GoalCriteriaCodecTest {
     @Test
     void serialize_null_returnsNull() {
         assertNull(GoalCriteriaCodec.serialize(null, mapper));
+    }
+
+    @Test
+    void duplicateVerdictIdsAreRejectedInsteadOfLastWriteWinning() {
+        var existing = List.of(new GoalCriterion("C1", "report", false, ""));
+        var failed = new GoalChecklistVerdict.CriterionVerdict("C1", false, "missing");
+        var passed = new GoalChecklistVerdict.CriterionVerdict("C1", true, "claimed written");
+        assertThrows(IllegalArgumentException.class, () -> GoalCriteriaCodec.merge(existing, List.of(failed, passed)));
+        assertThrows(IllegalArgumentException.class, () -> GoalCriteriaCodec.merge(existing, List.of(passed, failed)));
+        assertThrows(IllegalArgumentException.class, () -> GoalCriteriaCodec.merge(existing, List.of(passed, passed)));
+        assertFalse(existing.getFirst().passed());
     }
 
     // ---------- merge ----------

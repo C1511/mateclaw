@@ -81,10 +81,8 @@ public class GoalEvaluationService implements Evaluator {
     private final ProviderChatModelFactory chatModelFactory;
     private final ObjectMapper objectMapper;
 
-    private final BeanOutputConverter<GoalCriteriaDraft> draftConverter =
-            new BeanOutputConverter<>(GoalCriteriaDraft.class);
-    private final BeanOutputConverter<GoalChecklistVerdict> verdictConverter =
-            new BeanOutputConverter<>(GoalChecklistVerdict.class);
+    private final BeanOutputConverter<GoalCriteriaDraft> draftConverter;
+    private final BeanOutputConverter<GoalChecklistVerdict> verdictConverter;
 
     public GoalEvaluationService(GoalProperties properties,
                                  ModelConfigService modelConfigService,
@@ -94,6 +92,13 @@ public class GoalEvaluationService implements Evaluator {
         this.modelConfigService = modelConfigService;
         this.chatModelFactory = chatModelFactory;
         this.objectMapper = objectMapper;
+        // Preserve converter tolerance for extra fields, but never silently
+        // choose the last value of an ambiguous model-produced JSON key.
+        ObjectMapper evaluatorJson = objectMapper.copy()
+                .disable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
+        this.draftConverter = new BeanOutputConverter<>(GoalCriteriaDraft.class, evaluatorJson);
+        this.verdictConverter = new BeanOutputConverter<>(GoalChecklistVerdict.class, evaluatorJson);
     }
 
     /**
@@ -233,7 +238,8 @@ public class GoalEvaluationService implements Evaluator {
                     + "Revoke it when such contradictory evidence exists, citing that evidence. "
                     + "An attempted action, a goal description or a claim of completion is not proof. "
                     + "Newly passed criteria require concrete observable evidence. Return only changed "
-                    + "criterion verdicts; omitted criteria retain their previous state. Keep evidence concise. "
+                    + "criterion verdicts; omitted criteria retain their previous state. Return at most one "
+                    + "verdict per criterion id. Keep evidence concise. "
                     + "Output only the requested JSON.";
 
     private String buildUserPrompt(GoalEntity goal,

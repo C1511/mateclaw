@@ -60,6 +60,7 @@ public final class GoalCriteriaCodec {
      * Merge a per-round verdict delta into the full checklist by id. Criteria
      * absent from the delta retain their state unless their pass lacks evidence.
      * The criterion text is always kept from the existing item (the verdict never carries text).
+     * Duplicate verdict ids are ambiguous and rejected instead of taking the last value.
      */
     public static List<GoalCriterion> merge(List<GoalCriterion> existing,
                                             List<GoalChecklistVerdict.CriterionVerdict> verdicts) {
@@ -70,7 +71,9 @@ public final class GoalCriteriaCodec {
         if (verdicts != null) {
             for (GoalChecklistVerdict.CriterionVerdict v : verdicts) {
                 if (v != null && v.id() != null) {
-                    byId.put(v.id(), v);
+                    if (byId.putIfAbsent(v.id(), v) != null) {
+                        throw new IllegalArgumentException("Duplicate criterion verdict id");
+                    }
                 }
             }
         }
