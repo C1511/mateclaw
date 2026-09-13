@@ -11,6 +11,11 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import vip.mate.audit.service.AuditEventService;
 import vip.mate.exception.MateClawException;
 import vip.mate.goal.config.GoalProperties;
@@ -57,6 +62,7 @@ public class GoalServiceImpl implements GoalService {
     private final AuditEventService auditEventService;
     private final ObjectMapper objectMapper;
     private ApplicationEventPublisher applicationEventPublisher;
+    private PlatformTransactionManager transactionManager;
 
     /**
      * Optional — only set when the memory subsystem is wired. On goal
@@ -87,6 +93,11 @@ public class GoalServiceImpl implements GoalService {
     @Autowired(required = false)
     public void setApplicationEventPublisher(ApplicationEventPublisher publisher) {
         this.applicationEventPublisher = publisher;
+    }
+
+    @Autowired(required = false)
+    public void setTransactionManager(PlatformTransactionManager manager) {
+        this.transactionManager = manager;
     }
 
     // ==================== CRUD ====================
@@ -431,24 +442,45 @@ public class GoalServiceImpl implements GoalService {
         writeEvent(id, GoalEventType.COMPLETED, null, detail);
         recordAudit("goal.completed", g, detail);
 
-        // Forward to long-term memory on completion. Best-effort: a failing
-        // memory pipeline must not roll back the DB transition.
-        if (memoryManager != null) {
+        syncCompletionMemoryAfterCommit(g, result);
+        return g;
+    }
+
+    private void syncCompletionMemoryAfterCommit(GoalEntity goal, GoalEvaluationResult result) {
+        var target = memoryManager;
+        if (target == null) return;
+        // Snapshot values before returning the mutable entity to the caller.
+        Long agentId = goal.getAgentId();
+        String conversationId = goal.getConversationId();
+        String subject = "[goal completed] " + goal.getTitle();
+        String summary = goal.getProgressSummary() != null && !goal.getProgressSummary().isBlank()
+                ? goal.getProgressSummary() : "Final score: " + (result != null ? result.score() : "—");
+        Runnable sync = () -> {
             try {
-                String summary = g.getProgressSummary() != null && !g.getProgressSummary().isBlank()
-                        ? g.getProgressSummary()
-                        : "Final score: " + (result != null ? result.score() : "—");
-                memoryManager.syncAll(
-                        g.getAgentId(),
-                        g.getConversationId(),
-                        "[goal completed] " + g.getTitle(),
-                        summary);
+                if (transactionManager != null) {
+                    // afterCommit still has the old transaction's resources bound.
+                    // Adapter DB writes need their own transaction to commit reliably.
+                    TransactionTemplate independent = new TransactionTemplate(transactionManager);
+                    independent.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    independent.executeWithoutResult(status -> target.syncAll(agentId, conversationId, subject, summary));
+                } else {
+                    target.syncAll(agentId, conversationId, subject, summary);
+                }
             } catch (Exception e) {
                 log.debug("[GoalService] memory syncAll on goal completion failed: {}", e.getMessage());
             }
+        };
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override public void afterCommit() { sync.run(); }
+                });
+            } else {
+                log.debug("[GoalService] skipped completion memory: no commit synchronization available");
+            }
+        } else {
+            sync.run(); // Direct/non-transactional callers retain best-effort behavior.
         }
-
-        return g;
     }
 
     @Override

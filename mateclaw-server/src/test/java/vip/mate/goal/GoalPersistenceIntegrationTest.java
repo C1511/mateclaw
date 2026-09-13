@@ -229,6 +229,68 @@ class GoalPersistenceIntegrationTest {
         org.mockito.Mockito.verifyNoInteractions(memory);
     }
 
+    private GoalEntity readyForCompletion(String conversation, String title) {
+        GoalEntity goal = goalService.create(req(conversation, title), "alice");
+        goalService.appendCriterion(goal.getId(), "report", "alice");
+        var passed = new vip.mate.goal.model.GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0,
+                java.util.List.of(new vip.mate.goal.model.GoalChecklistVerdict.CriterionVerdict("C1", true, "report evidence")), null);
+        goalService.recordEvaluation(goal.getId(), passed, 0, 1);
+        return goalService.getById(goal.getId());
+    }
+
+    @Test
+    void rolledBackCompletionDoesNotSyncMemory() {
+        GoalEntity goal = readyForCompletion("completion-memory-rollback", "report");
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            goalService.markCompleted(goal.getId(), null);
+            status.setRollbackOnly();
+        });
+        assertEquals(GoalStatus.ACTIVE, goalService.getById(goal.getId()).getStatus());
+        assertEquals(0L, goalService.listEvents(goal.getId(), 30).stream()
+                .filter(event -> "completed".equals(event.getEventType())).count());
+        org.mockito.Mockito.verifyNoInteractions(memory);
+    }
+
+    @Test
+    void completionMemoryRunsAfterCommitAndItsDatabaseWritesCommitIndependently() {
+        GoalEntity goal = readyForCompletion("completion-memory-after-commit", "original title");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS goal_memory_callback_probe(goal_id BIGINT PRIMARY KEY)");
+        org.mockito.Mockito.doAnswer(call -> {
+            inIndependentTransaction(() -> assertEquals(GoalStatus.COMPLETED,
+                    goalService.getById(goal.getId()).getStatus()));
+            assertEquals("[goal completed] original title", call.getArgument(2));
+            jdbc.update("INSERT INTO goal_memory_callback_probe(goal_id) VALUES(?)", goal.getId());
+            return null;
+        }).when(memory).syncAll(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            GoalEntity returned = goalService.markCompleted(goal.getId(), null);
+            returned.setTitle("mutated after return");
+            org.mockito.Mockito.verifyNoInteractions(memory);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() {
+                    inIndependentTransaction(() -> assertEquals(1, jdbc.queryForObject(
+                            "SELECT COUNT(*) FROM goal_memory_callback_probe WHERE goal_id=?", Integer.class, goal.getId())));
+                }
+            });
+        });
+        org.mockito.Mockito.verify(memory, org.mockito.Mockito.times(1)).syncAll(
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void memoryFailureCannotUndoCommittedCompletion() {
+        GoalEntity goal = readyForCompletion("completion-memory-failure", "report");
+        org.mockito.Mockito.doThrow(new IllegalStateException("fixture failure")).when(memory).syncAll(
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        goalService.markCompleted(goal.getId(), null);
+        assertEquals(GoalStatus.COMPLETED, goalService.getById(goal.getId()).getStatus());
+        assertEquals(1L, goalService.listEvents(goal.getId(), 30).stream()
+                .filter(event -> "completed".equals(event.getEventType())).count());
+    }
+
     @Test
     @DisplayName("GoalStatus values persist as lowercase literals — load-bearing for uk_agent_goal_active_conv")
     void status_persistsAsLowercaseString() {
