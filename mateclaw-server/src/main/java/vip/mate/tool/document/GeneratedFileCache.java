@@ -506,12 +506,21 @@ public class GeneratedFileCache {
         Path bin = storageDir.resolve(id).normalize();
         Path meta = storageDir.resolve(id + META_SUFFIX).normalize();
         // Containment guard — id is already validated, this is defence in depth.
-        if (!bin.startsWith(storageDir) || !Files.isRegularFile(bin) || !Files.isRegularFile(meta)) {
+        if (!bin.startsWith(storageDir) || !Files.isRegularFile(bin, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isRegularFile(meta, LinkOption.NOFOLLOW_LINKS)) {
             return null;
         }
         try {
-            Metadata parsed = parseMeta(Files.readString(meta), id);
-            byte[] bytes = Files.readAllBytes(bin);
+            // Refuse leaf symlinks again at open, including replacement after the
+            // regular-file check. Parent-directory ownership is a separate boundary.
+            Metadata parsed;
+            try (var input = Files.newInputStream(meta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                parsed = parseMeta(new String(input.readAllBytes(), StandardCharsets.UTF_8), id);
+            }
+            byte[] bytes;
+            try (var input = Files.newInputStream(bin, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                bytes = input.readAllBytes();
+            }
             return new Entry(bytes, parsed.filename(), parsed.mimeType(), parsed.expireAt(),
                     parsed.workspaceId(), parsed.ownerUserId(), parsed.conversationId());
         } catch (Exception e) {

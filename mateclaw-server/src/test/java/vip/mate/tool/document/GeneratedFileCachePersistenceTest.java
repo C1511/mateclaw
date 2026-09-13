@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -17,6 +19,32 @@ import static org.junit.jupiter.api.Assertions.*;
  * a document.
  */
 class GeneratedFileCachePersistenceTest {
+
+    @Test
+    void coldDownloadRejectsSymbolicLinkToExternalContent(@TempDir Path dir) throws IOException {
+        Path storage = Files.createDirectory(dir.resolve("cache"));
+        var cache = new GeneratedFileCache(storage);
+        String id = cache.put("original".getBytes(StandardCharsets.UTF_8), "report.txt", "text/plain");
+        Path external = Files.writeString(dir.resolve("private.txt"), "outside content");
+        Files.delete(storage.resolve(id));
+        Files.createSymbolicLink(storage.resolve(id), external);
+
+        assertTrue(new GeneratedFileCache(storage).get(id).isEmpty());
+        assertEquals("outside content", Files.readString(external));
+    }
+
+    @Test
+    void coldDownloadRejectsSymbolicLinkToExternalMetadata(@TempDir Path dir) throws IOException {
+        Path storage = Files.createDirectory(dir.resolve("cache"));
+        var cache = new GeneratedFileCache(storage);
+        String id = cache.put("original".getBytes(StandardCharsets.UTF_8), "report.txt", "text/plain");
+        Path metadata = storage.resolve(id + ".meta");
+        Path external = Files.move(metadata, dir.resolve("outside.meta"));
+        Files.createSymbolicLink(metadata, external);
+
+        assertTrue(new GeneratedFileCache(storage).get(id).isEmpty());
+        assertTrue(Files.isRegularFile(external));
+    }
 
     @Test
     void callerCannotChangeRegisteredVersionThroughInputBytes(@TempDir Path dir) {
