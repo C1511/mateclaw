@@ -21,6 +21,8 @@ import java.time.Instant;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -396,21 +398,72 @@ public class GeneratedFileCache {
         }
     }
 
+    /** No positive verification state: a matching shared file is still unverified. */
+    public enum ArtifactVersion { UNVERIFIED, CHANGED, UNAVAILABLE }
+
     /** Bounded metadata-only probe. Availability does not imply that current content is verified. */
     public boolean isDurablyAvailable(String id, Long workspaceId, String conversationId) {
-        if (id == null || !ID_RE.matcher(id).matches()) return false;
-        Path bin = storageDir.resolve(id).normalize();
-        Path meta = storageDir.resolve(id + META_SUFFIX).normalize();
         try {
-            if (!bin.startsWith(storageDir) || !Files.isRegularFile(bin)
-                    || !Files.isRegularFile(meta) || Files.size(meta) > 16_384) return false;
-            Metadata stored = parseMeta(Files.readString(meta), id);
-            return stored.expireAt() > System.currentTimeMillis()
-                    && Objects.equals(workspaceId, stored.workspaceId())
-                    && Objects.equals(conversationId, stored.conversationId());
-        } catch (Exception unavailable) {
+            return availableMetadata(id, workspaceId, conversationId) != null;
+        } catch (IOException | RuntimeException unavailable) {
             return false;
         }
+    }
+
+    /**
+     * On-demand bounded comparison with a historical snapshot, never a freshness certificate.
+     * A changed digest is useful negative evidence; equality cannot exclude concurrent writers.
+     */
+    public ArtifactVersion probeDurableArtifactVersion(String id, Long workspaceId, String conversationId,
+                                                      String expectedDigest, int maxBytes) {
+        try {
+            Metadata before = availableMetadata(id, workspaceId, conversationId);
+            if (before == null) return ArtifactVersion.UNAVAILABLE;
+            int budget = Math.clamp(maxBytes, 0, 16_777_216);
+            if (budget == 0 || expectedDigest == null || !expectedDigest.matches("[0-9a-fA-F]{64}")) {
+                return ArtifactVersion.UNVERIFIED;
+            }
+            Path bin = storageDir.resolve(id);
+            if (Files.size(bin) > budget) return ArtifactVersion.UNVERIFIED;
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            int total = 0;
+            byte[] buffer = new byte[8192];
+            try (var input = Files.newInputStream(bin, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                int read;
+                // At most budget+1 bytes even if a concurrent writer grows the file.
+                while ((read = input.read(buffer, 0, Math.min(buffer.length, budget + 1 - total))) != -1) {
+                    total += read;
+                    if (total > budget) return ArtifactVersion.UNVERIFIED;
+                    digest.update(buffer, 0, read);
+                }
+            }
+            Metadata after = availableMetadata(id, workspaceId, conversationId);
+            if (after == null) return ArtifactVersion.UNAVAILABLE;
+            if (!before.equals(after)) return ArtifactVersion.UNVERIFIED;
+            return expectedDigest.equalsIgnoreCase(HexFormat.of().formatHex(digest.digest()))
+                    ? ArtifactVersion.UNVERIFIED : ArtifactVersion.CHANGED;
+        } catch (IOException | RuntimeException unavailable) {
+            return ArtifactVersion.UNAVAILABLE;
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    private Metadata availableMetadata(String id, Long workspaceId, String conversationId) throws IOException {
+        if (id == null || !ID_RE.matcher(id).matches()) return null;
+        Path bin = storageDir.resolve(id).normalize();
+        Path meta = storageDir.resolve(id + META_SUFFIX).normalize();
+        if (!bin.startsWith(storageDir) || !Files.isRegularFile(bin, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isRegularFile(meta, LinkOption.NOFOLLOW_LINKS)) return null;
+        byte[] raw;
+        try (var input = Files.newInputStream(meta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            raw = input.readNBytes(16_385);
+        }
+        if (raw.length > 16_384) return null;
+        Metadata stored = parseMeta(new String(raw, StandardCharsets.UTF_8), id);
+        return stored.expireAt() > System.currentTimeMillis()
+                && Objects.equals(workspaceId, stored.workspaceId())
+                && Objects.equals(conversationId, stored.conversationId()) ? stored : null;
     }
 
     private Entry loadFromDisk(String id) {

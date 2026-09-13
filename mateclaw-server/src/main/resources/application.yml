@@ -134,6 +134,8 @@ mateclaw:
   execution-evidence:
     # Observe receipts only. Enforcement requires managed verification scopes and is not available yet.
     mode: observe
+    # On-demand detail probe only; matching bytes remain UNKNOWN without managed scopes. 0 disables.
+    artifact-version-check-max-bytes: 1048576
     retention-days: 90
     max-summary-bytes: 2048
     max-observations: 32

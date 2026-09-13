@@ -100,6 +100,7 @@ class ExecutionEvidenceQueryTest {
         assertEquals("UNAVAILABLE", unavailable.validity());
         assertNull(unavailable.artifactRef());
         assertNull(unavailable.artifactDigest());
+        verifyNoInteractions(files);
     }
 
     @Test void emptyPageDoesNotLoadAttempts() {
@@ -133,6 +134,33 @@ class ExecutionEvidenceQueryTest {
         when(store.findAttempts(1L, "conv", List.of(1L))).thenReturn(Map.of(1L, foreign));
         assertEquals(404, assertThrows(MateClawException.class,
                 () -> list("owner", 1L, "conv", null, null)).getCode());
+    }
+
+    @Test void detailDetectsChangedPersistedArtifact(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+        var cache = new GeneratedFileCache(root);
+        byte[] bytes = "original report".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String artifactId = cache.put(bytes, "report.txt", "text/plain", new GeneratedFileCache.Owner(1L, 1L, "conv"));
+        String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        var observation = new EvidenceObservation("artifact:" + artifactId, EvidenceKind.ARTIFACT_SNAPSHOT,
+                EvidenceResult.OBSERVED, SourceLevel.PLATFORM_OBSERVED, null, null, null, null, null,
+                null, artifactId, digest, "registered file", null, Instant.now(), Instant.now().plusSeconds(3600));
+        when(store.findById(id)).thenReturn(Optional.of(new ExecutionEvidence(id, 1L, 1L, "conv", observation)));
+        var auth = mock(AuthService.class);
+        var admin = new vip.mate.auth.model.UserEntity();
+        admin.setId(1L); admin.setRole("admin");
+        when(auth.findByUsername("owner")).thenReturn(admin);
+        var properties = new ExecutionEvidenceProperties();
+        queries = new ExecutionEvidenceQueryService(store, conversations, teams, cache, auth,
+                mock(WorkspaceService.class), properties, new SimpleMeterRegistry());
+        assertEquals("UNKNOWN", queries.detail("owner", 1L, id).validity());
+        java.nio.file.Files.writeString(root.resolve(artifactId), "externally replaced");
+        assertEquals("STALE", queries.detail("owner", 1L, id).validity());
+        when(store.list(eq(1L), eq("conv"), isNull(), isNull(), eq(21), isNull(), isNull()))
+                .thenReturn(List.of(new ExecutionEvidence(id, 1L, 1L, "conv", observation)));
+        assertEquals("UNKNOWN", list("owner", 1L, "conv", null, 20).items().getFirst().validity(),
+                "pagination must remain metadata-only");
+        properties.setArtifactVersionCheckMaxBytes(0);
+        assertEquals("UNKNOWN", queries.detail("owner", 1L, id).validity());
     }
 
     private ExecutionEvidenceQueryService.Page list(String user, Long workspace, String conversation, String cursor, Integer limit) {

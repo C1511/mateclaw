@@ -9,6 +9,9 @@ public class ExecutionEvidenceProperties {
     public enum Mode { OFF, OBSERVE, ENFORCE }
     private Mode mode = Mode.OBSERVE;
     private int retentionDays = 90;
+    private int artifactVersionCheckMaxBytes = 1_048_576;
+    public int getArtifactVersionCheckMaxBytes() { return artifactVersionCheckMaxBytes; }
+    public void setArtifactVersionCheckMaxBytes(int value) { artifactVersionCheckMaxBytes = Math.clamp(value, 0, 16_777_216); }
     private int cleanupMaxBatches = 10;
     public int getCleanupMaxBatches() { return cleanupMaxBatches; }
     public void setCleanupMaxBatches(int value) { cleanupMaxBatches = Math.clamp(value, 1, 100); }

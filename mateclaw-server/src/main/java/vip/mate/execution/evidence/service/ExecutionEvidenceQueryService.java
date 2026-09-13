@@ -68,7 +68,7 @@ public class ExecutionEvidenceQueryService {
             if (page.isEmpty()) return new Page(List.of(), null);
             var attempts = store.findAttempts(canonicalWorkspace, conversationId,
                     page.stream().map(ExecutionEvidence::attemptId).distinct().toList());
-            return new Page(page.stream().map(row -> view(username, row, attempts.get(row.attemptId()))).toList(),
+            return new Page(page.stream().map(row -> view(username, row, attempts.get(row.attemptId()), false)).toList(),
                     hasMore ? encode(page.getLast()) : null);
         } finally {
             metrics.timer("mateclaw.execution.evidence.query.latency").record(
@@ -81,7 +81,7 @@ public class ExecutionEvidenceQueryService {
         ExecutionEvidence row = store.findById(id).orElseThrow(this::hidden);
         Long canonicalWorkspace = authorize(username, workspaceId, row.conversationId());
         if (!canonicalWorkspace.equals(row.workspaceId())) throw hidden();
-        return view(username, row, store.findAttempt(row.attemptId()).orElseThrow(this::hidden));
+        return view(username, row, store.findAttempt(row.attemptId()).orElseThrow(this::hidden), true);
     }
 
     private Long authorize(String username, Long workspaceId, String conversationId) {
@@ -94,7 +94,7 @@ public class ExecutionEvidenceQueryService {
         return conversation.getWorkspaceId();
     }
 
-    private View view(String username, ExecutionEvidence row, ExecutionAttempt attempt) {
+    private View view(String username, ExecutionEvidence row, ExecutionAttempt attempt, boolean inspectVersion) {
         if (attempt == null || !Objects.equals(attempt.id(), row.attemptId())) throw hidden();
         if (!Objects.equals(attempt.identity().workspaceId(), row.workspaceId())
                 || !Objects.equals(attempt.identity().conversationId(), row.conversationId())) throw hidden();
@@ -116,6 +116,16 @@ public class ExecutionEvidenceQueryService {
             } else if (!files.isDurablyAvailable(artifact, row.workspaceId(), row.conversationId())) {
                 validity = "UNAVAILABLE";
                 artifact = null;
+            } else if (inspectVersion && !"UNAVAILABLE".equals(validity)) {
+                var version = files.probeDurableArtifactVersion(artifact, row.workspaceId(), row.conversationId(),
+                        digest, properties.getArtifactVersionCheckMaxBytes());
+                if (version == GeneratedFileCache.ArtifactVersion.CHANGED) {
+                    validity = "STALE";
+                } else if (version == GeneratedFileCache.ArtifactVersion.UNAVAILABLE) {
+                    validity = "UNAVAILABLE";
+                    artifact = null;
+                }
+                // Equality/budget exhaustion remains UNKNOWN; there is no managed generation fence.
             }
         }
         metrics.counter("mateclaw.execution.evidence.validity", "status", validity).increment();

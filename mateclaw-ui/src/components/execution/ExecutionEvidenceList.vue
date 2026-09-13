@@ -11,11 +11,15 @@ const loading = ref(false)
 const errorKey = ref('')
 const items = ref<ExecutionEvidence[]>([])
 const nextCursor = ref<string | null>(null)
+const detailLoading = ref<Record<string, boolean>>({})
+const detailErrors = ref<Record<string, string>>({})
 let generation = 0
 
 async function load(more = false) {
   if (loading.value || !props.conversationId) return
   const request = ++generation
+  detailLoading.value = {}
+  detailErrors.value = {}
   loading.value = true
   errorKey.value = ''
   try {
@@ -38,6 +42,29 @@ async function load(more = false) {
     if (request === generation) loading.value = false
   }
 }
+async function loadDetail(id: string, event: Event) {
+  if (!(event.target as HTMLDetailsElement).open || detailLoading.value[id]) return
+  const request = generation
+  detailLoading.value[id] = true
+  delete detailErrors.value[id]
+  try {
+    const { data } = await executionEvidenceApi.get(id)
+    if (request !== generation) return
+    items.value = items.value.map(item => item.id === id ? data : item)
+  } catch (error) {
+    if (request !== generation) return
+    const failure = error as { code?: number; response?: { status?: number } }
+    const code = failure.response?.status ?? failure.code
+    if (code === 401 || code === 403 || code === 404) {
+      items.value = items.value.filter(item => item.id !== id)
+      errorKey.value = 'executionEvidence.accessError'
+    } else {
+      detailErrors.value[id] = 'executionEvidence.loadError'
+    }
+  } finally {
+    if (request === generation) delete detailLoading.value[id]
+  }
+}
 function toggle() {
   expanded.value = !expanded.value
   if (expanded.value && !loaded.value) void load()
@@ -45,6 +72,8 @@ function toggle() {
 watch(() => [props.conversationId, props.goalId, props.teamTaskId], () => {
   generation++
   items.value = []
+  detailLoading.value = {}
+  detailErrors.value = {}
   nextCursor.value = null
   errorKey.value = ''
   loaded.value = false
@@ -80,8 +109,10 @@ onBeforeUnmount(() => { generation++ })
             <div><dt>{{ t('executionEvidence.observedAt') }}</dt><dd><time :datetime="item.observedAt">{{ item.observedAt }}</time></dd></div>
             <div v-if="item.expiresAt"><dt>{{ t('executionEvidence.expiresAt') }}</dt><dd><time :datetime="item.expiresAt">{{ item.expiresAt }}</time></dd></div>
           </dl>
-          <details>
+          <details @toggle="loadDetail(item.id, $event)" :aria-busy="!!detailLoading[item.id]">
             <summary>{{ t('executionEvidence.details') }}</summary>
+            <p v-if="detailLoading[item.id]" role="status">{{ t('common.loading') }}</p>
+            <p v-if="detailErrors[item.id]" role="alert">{{ t(detailErrors[item.id]) }}</p>
             <dl>
               <div><dt>{{ t('executionEvidence.id') }}</dt><dd>{{ item.id }}</dd></div>
               <div><dt>{{ t('executionEvidence.attemptId') }}</dt><dd>{{ item.attemptId }}</dd></div>
