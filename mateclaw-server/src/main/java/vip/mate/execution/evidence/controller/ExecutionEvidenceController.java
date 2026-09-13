@@ -3,6 +3,10 @@ package vip.mate.execution.evidence.controller;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import java.util.List;
+import vip.mate.execution.evidence.service.JsonArtifactRecipe;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,4 +40,14 @@ public class ExecutionEvidenceController {
             @PathVariable Long id) {
         return R.ok(queries.detail(auth == null ? null : auth.getName(), workspaceId, id));
     }
+    public record JsonCheckRequest(List<String> requiredFields) { }
+
+    @PostMapping("/{id}/json-check")
+    public R<JsonArtifactRecipe.Result> checkJson(Authentication auth,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            @PathVariable Long id, @RequestBody JsonCheckRequest request) {
+        return R.ok(queries.checkJson(auth == null ? null : auth.getName(), workspaceId, id,
+                request == null ? null : request.requiredFields()));
+    }
+
 }

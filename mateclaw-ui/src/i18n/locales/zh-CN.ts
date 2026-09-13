@@ -1,5 +1,14 @@
 export default {
   executionEvidence: {
+    jsonCheck: {
+      label: 'JSON 必需字段', placeholder: '每行一个顶层字段名', run: '检查 JSON 文件',
+      scope: '检查 JSON 对象是否包含指定的顶层字段且值非 null。最多 16 个字段、1 MiB 文件。',
+      inputError: '请输入 1–16 个不重复的字段名，每行一个，每项不超过 128 字符。',
+      limitation: '结果仅针对此时间读取到的文件内容，不会完成目标或使目标通过验收。',
+      status: { MATCH: '指定字段均存在。', MISSING_FIELDS: '以下字段缺失或值为 null：',
+        INVALID_JSON: '文件不是支持的 JSON 对象。', UNKNOWN: '未能在配置限制内完成检查。',
+        STALE: '文件内容与登记快照不同。', UNAVAILABLE: '文件不可用或访问权限已变化。' },
+    },
     scope: '执行目录 / 检查范围',
     title: '执行证据', observationOnly: '仅展示运行时观察记录。工具返回或命令退出不代表目标或任务已验证。覆盖范围仅限已记录的来源。',
     refresh: '刷新', loadMore: '加载更多', empty: '暂无执行证据记录。',

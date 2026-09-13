@@ -77,11 +77,30 @@ public class ExecutionEvidenceQueryService {
     }
 
     public View detail(String username, Long workspaceId, Long id) {
+        return authorizedDetail(username, workspaceId, id, true);
+    }
+
+    private View authorizedDetail(String username, Long workspaceId, Long id, boolean inspectVersion) {
         if (username == null || username.isBlank() || id == null) throw hidden();
         ExecutionEvidence row = store.findById(id).orElseThrow(this::hidden);
         Long canonicalWorkspace = authorize(username, workspaceId, row.conversationId());
         if (!canonicalWorkspace.equals(row.workspaceId())) throw hidden();
-        return view(username, row, store.findAttempt(row.attemptId()).orElseThrow(this::hidden), true);
+        return view(username, row, store.findAttempt(row.attemptId()).orElseThrow(this::hidden), inspectVersion);
+    }
+
+    public JsonArtifactRecipe.Result checkJson(String username, Long workspaceId, Long id, List<String> fields) {
+        // Reuse source, attempt and file authorization before any content read.
+        View view = authorizedDetail(username, workspaceId, id, false);
+        List<String> required = JsonArtifactRecipe.validate(fields);
+        if (view.kind() != EvidenceKind.ARTIFACT_SNAPSHOT || view.artifactRef() == null
+                || "UNAVAILABLE".equals(view.validity())) {
+            return JsonArtifactRecipe.outcome("UNAVAILABLE", required, List.of());
+        }
+        Long ownerWorkspace = authorize(username, workspaceId, view.conversationId());
+        var read = files.readDurableArtifactSnapshot(view.artifactRef(), ownerWorkspace, view.conversationId(),
+                view.artifactDigest(), properties.getArtifactVersionCheckMaxBytes());
+        return "READ".equals(read.status()) ? JsonArtifactRecipe.check(read.bytes(), required)
+                : JsonArtifactRecipe.outcome(read.status(), required, List.of());
     }
 
     private Long authorize(String username, Long workspaceId, String conversationId) {

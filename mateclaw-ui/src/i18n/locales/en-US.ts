@@ -1,5 +1,14 @@
 export default {
   executionEvidence: {
+    jsonCheck: {
+      label: 'Required JSON fields', placeholder: 'One top-level field per line', run: 'Check JSON file',
+      scope: 'Checks a JSON object for the listed top-level fields with non-null values. Up to 16 fields and 1 MiB.',
+      inputError: 'Enter 1–16 unique field names, one per line, up to 128 characters each.',
+      limitation: 'This result describes the bytes read at the time shown. It does not complete or verify a goal.',
+      status: { MATCH: 'All listed fields are present.', MISSING_FIELDS: 'Required fields are missing or null:',
+        INVALID_JSON: 'The file is not a supported JSON object.', UNKNOWN: 'The check could not run within the configured limits.',
+        STALE: 'The file differs from the registered snapshot.', UNAVAILABLE: 'The file is unavailable or access has changed.' },
+    },
     scope: 'Working directory / check scope',
     title: 'Execution evidence', observationOnly: 'Runtime observations only. A tool return or command exit does not verify the goal or task. Coverage is limited to recorded sources.',
     refresh: 'Refresh', loadMore: 'Load more', empty: 'No execution evidence recorded.',

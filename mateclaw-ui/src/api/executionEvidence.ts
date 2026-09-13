@@ -26,7 +26,17 @@ export interface ExecutionEvidenceQuery {
   cursor?: string
   limit?: number
 }
+export interface ArtifactJsonCheck {
+  recipeId: string
+  recipeRevision: number
+  status: 'MATCH' | 'MISSING_FIELDS' | 'INVALID_JSON' | 'UNKNOWN' | 'STALE' | 'UNAVAILABLE'
+  requiredFields: string[]
+  missingFields: string[]
+  checkedAt: string
+  acceptanceEligible: false
+}
 export const executionEvidenceApi = {
   list: (params: ExecutionEvidenceQuery) => http.get<never, { data: ExecutionEvidencePage }>('/execution-evidence', { params }),
+  checkJson: (id: string, requiredFields: string[]) => http.post<never, { data: ArtifactJsonCheck }>(`/execution-evidence/${encodeURIComponent(id)}/json-check`, { requiredFields }),
   get: (id: string) => http.get<never, { data: ExecutionEvidence }>(`/execution-evidence/${encodeURIComponent(id)}`),
 }

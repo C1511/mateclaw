@@ -65,5 +65,36 @@ class GeneratedFileArtifactVersionTest {
         Files.createSymbolicLink(root.resolve(id), outside);
         assertFalse(cache.isDurablyAvailable(id, 1L, "conv"));
         assertEquals(UNAVAILABLE, cache.probeDurableArtifactVersion(id, 1L, "conv", digest("report"), 1024));
+        assertEquals("UNAVAILABLE", cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 1024).status());
     }
+    @Test void boundedSnapshotReadsOnlyMatchingOwnedDurableBytes() throws Exception {
+        var cache = new GeneratedFileCache(root);
+        String id = put(cache, "report");
+        var read = cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 6);
+        assertEquals("READ", read.status());
+        assertEquals("report", new String(read.bytes(), StandardCharsets.UTF_8));
+        read.bytes()[0] = 'X';
+        assertEquals("report", new String(read.bytes(), StandardCharsets.UTF_8));
+        assertEquals("UNKNOWN", cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 5).status());
+        assertEquals("UNKNOWN", cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 0).status());
+        assertEquals("UNKNOWN", cache.readDurableArtifactSnapshot(id, 1L, "conv", "fake", 10).status());
+        assertEquals("UNAVAILABLE", cache.readDurableArtifactSnapshot(id, 2L, "conv", digest("report"), 10).status());
+        assertEquals("UNAVAILABLE", cache.readDurableArtifactSnapshot(id, 1L, "other", digest("report"), 10).status());
+        Files.writeString(root.resolve(id), "changed");
+        var stale = cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 10);
+        assertEquals("STALE", stale.status());
+        assertNull(stale.bytes());
+        Files.delete(root.resolve(id));
+        assertEquals("UNAVAILABLE", cache.readDurableArtifactSnapshot(id, 1L, "conv", digest("report"), 10).status());
+    }
+
+    @Test void snapshotReadHasAHardOneMebibyteLimit() throws Exception {
+        var cache = new GeneratedFileCache(root);
+        String content = "x".repeat(1_048_577);
+        String id = put(cache, content);
+        var result = cache.readDurableArtifactSnapshot(id, 1L, "conv", digest(content), Integer.MAX_VALUE);
+        assertEquals("UNKNOWN", result.status());
+        assertNull(result.bytes());
+    }
+
 }

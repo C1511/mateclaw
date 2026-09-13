@@ -449,6 +449,42 @@ public class GeneratedFileCache {
         }
     }
 
+    /** One bounded read for an explicit content check, never a managed-scope certificate. */
+    public record ArtifactRead(String status, byte[] bytes) {
+        public ArtifactRead { bytes = bytes == null ? null : bytes.clone(); }
+        @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }
+    }
+
+    public ArtifactRead readDurableArtifactSnapshot(String id, Long workspaceId, String conversationId,
+                                                    String expectedDigest, int maxBytes) {
+        try {
+            if (workspaceId == null || conversationId == null) return new ArtifactRead("UNAVAILABLE", null);
+            Metadata before = availableMetadata(id, workspaceId, conversationId);
+            if (before == null) return new ArtifactRead("UNAVAILABLE", null);
+            int budget = Math.clamp(maxBytes, 0, 1_048_576);
+            if (budget == 0 || expectedDigest == null || !expectedDigest.matches("[0-9a-fA-F]{64}")) {
+                return new ArtifactRead("UNKNOWN", null);
+            }
+            Path bin = storageDir.resolve(id);
+            if (Files.size(bin) > budget) return new ArtifactRead("UNKNOWN", null);
+            byte[] bytes;
+            try (var input = Files.newInputStream(bin, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                bytes = input.readNBytes(budget + 1);
+            }
+            if (bytes.length > budget) return new ArtifactRead("UNKNOWN", null);
+            Metadata after = availableMetadata(id, workspaceId, conversationId);
+            if (after == null) return new ArtifactRead("UNAVAILABLE", null);
+            if (!before.equals(after)) return new ArtifactRead("UNKNOWN", null);
+            String actual = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+            return expectedDigest.equalsIgnoreCase(actual)
+                    ? new ArtifactRead("READ", bytes) : new ArtifactRead("STALE", null);
+        } catch (IOException | RuntimeException unavailable) {
+            return new ArtifactRead("UNAVAILABLE", null);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
     private Metadata availableMetadata(String id, Long workspaceId, String conversationId) throws IOException {
         if (id == null || !ID_RE.matcher(id).matches()) return null;
         Path bin = storageDir.resolve(id).normalize();

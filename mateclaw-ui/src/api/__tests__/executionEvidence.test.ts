@@ -18,4 +18,10 @@ describe('executionEvidenceApi', () => {
       adapter: async config => ({ data: { code: 403, msg: 'Forbidden', data: null }, status: 200, statusText: 'OK', headers: {}, config }),
     })).rejects.toMatchObject({ code: 403, message: 'Forbidden' })
   })
+  it('sends explicit requirements while preserving the evidence ID', () => {
+    const post = vi.spyOn(http, 'post').mockResolvedValue({} as never)
+    executionEvidenceApi.checkJson('9223372036854775804', ['report', 'appendix'])
+    expect(post).toHaveBeenCalledWith('/execution-evidence/9223372036854775804/json-check', { requiredFields: ['report', 'appendix'] })
+  })
+
 })
