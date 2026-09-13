@@ -60,3 +60,48 @@ strong acceptance. A future trusted file recipe must use a separate execution
 mode and record its actual filesystem/version checks. A real model comparison
 must additionally pin runtime/skill/model versions and measure real calls; it
 cannot reuse these matched counts as its success rate.
+
+## Artifact tasks with actual temporary-file I/O
+
+`artifact-boundaries-v1.json` is a separate schema/execution mode. Run it from the
+repository root:
+
+```sh
+mvn -pl mateclaw-server -am -Dtest=OfflineArtifactTaskReplayTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dartifact.eval.revision="$(git rev-parse HEAD)" test
+```
+
+Output: `mateclaw-server/target/agent-evaluation/artifact-baseline.json`.
+Override `artifact.eval.suite` and `artifact.eval.report` with absolute paths for
+candidate runs. The initial committed artifact baseline's revision label refers
+to the production source before this harness was added. Reports additionally
+hash the actual loaded `GeneratedFileCache`, `Entry`, and
+`ExecutionObservationSink` class bytes, so a revision label alone is not treated
+as proof of which implementations were exercised. Class hashes depend on the
+compiler/build; compare revisions under the same build environment. They cover
+these named classes, not the entire transitive runtime or a signed attestation.
+
+Each artifact task has `id`, `task`, `source`, `operation`, `content`, and
+`expected`. Operations are a closed set: `REGISTER`, `MUTATE_INPUT`,
+`MUTATE_DOWNLOAD`, `RESTART_MUTATE_DOWNLOAD`, `STORAGE_UNAVAILABLE`,
+`DIRECT_RETURN`, `MISSING_OWNER`, `REWRITE_DISK`. Input strings are bounded to
+16,384 characters. The harness generates its own temporary paths and never
+executes fixture-provided paths, scripts or shell commands.
+
+Expected results include `hotContent`, nullable `coldContent`, `observations`
+(`[]` or `["ARTIFACT_SNAPSHOT:OBSERVED"]`), and nullable
+`hotMatchesSnapshot`/`coldMatchesSnapshot`. A match is null when no snapshot or
+readable version exists; it never silently becomes a pass. Every task uses the
+production cache and sink, writes/reads real temporary files, and reopens the
+cache to test restart behavior. The directory is removed by JUnit after the run.
+A mismatched expectation preserves all per-case results and fails the command.
+The checked-in `artifact-baseline-v1.json` documents these eight scenarios.
+
+`REWRITE_DISK` intentionally observes that the hot cache keeps the original
+bytes while a new cache reads the externally replaced version, which no longer
+matches the historic snapshot digest. This is a documented limit of unmanaged
+storage, not an accepted strong-validation result. The report never emits a
+CHECK_RESULT/PASS. These eight tests plus ten evaluator replays are **18 fixed
+scenarios, not 18 Agent task executions**. Actual task-solving models, their
+latency, cost and success rate remain unmeasured.
