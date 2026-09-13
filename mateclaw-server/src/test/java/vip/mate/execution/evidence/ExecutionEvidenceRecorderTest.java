@@ -145,6 +145,47 @@ class ExecutionEvidenceRecorderTest {
         assertEquals(AttemptState.CANCELLED, cancelled.state());
     }
 
+    @Test void observationArrivingImmediatelyBeforeSealCannotDisagreeWithStoredState() throws Exception {
+        var actualSink = new ExecutionObservationSink(false);
+        when(callback.call(anyString(), any())).thenReturn("callback returned");
+        // Deterministically inject the legal interleaving: an observer arrives
+        // immediately before sealing, after the old recorder read state().
+        try (var constructed = mockConstruction(ExecutionObservationSink.class, withSettings().defaultAnswer(call -> {
+            if (call.getMethod().getName().startsWith("seal")) {
+                actualSink.command(7, false, false, false);
+            }
+            return call.getMethod().invoke(actualSink, call.getArguments());
+        }))) {
+            assertEquals("callback returned", invoke());
+            assertEquals(1, constructed.constructed().size());
+            verify(store).finish(eq(1L), eq("fence"), eq(AttemptState.FAILED), eq(EffectOutcome.UNCERTAIN),
+                    argThat(rows -> rows.size() == 2 && rows.stream().allMatch(row -> row.result() == EvidenceResult.FAIL)));
+        }
+    }
+
+    @Test void sealedSnapshotCannotBeChangedByLateObserversOrItsReader() {
+        var sink = new ExecutionObservationSink(false);
+        sink.command(7, false, false, false);
+        var captured = sink.sealAndSnapshot();
+        sink.command(0, false, false, false);
+        sink.artifact("late", "digest", 1, "text/plain", Instant.now());
+        assertEquals(AttemptState.FAILED, captured.state());
+        assertEquals(1, captured.observations().size());
+        assertEquals(captured, sink.sealAndSnapshot());
+        assertThrows(UnsupportedOperationException.class, () -> captured.observations().clear());
+    }
+
+    @Test void callbackCancellationOverridesSuccessfulCommandSnapshot() {
+        when(callback.call(anyString(), any())).thenAnswer(call -> {
+            ExecutionObservationSink.from(call.getArgument(1)).command(0, false, false, false);
+            throw new java.util.concurrent.CancellationException("cancelled");
+        });
+        assertThrows(java.util.concurrent.CancellationException.class, this::invoke);
+        verify(store).finish(eq(1L), eq("fence"), eq(AttemptState.CANCELLED), eq(EffectOutcome.UNCERTAIN),
+                argThat(rows -> rows.size() == 2 && rows.getFirst().result() == EvidenceResult.OBSERVED
+                        && rows.getLast().result() == EvidenceResult.UNKNOWN));
+    }
+
     private String invoke() {
         return recorder.invoke(callback, "{}", ChatOrigin.web("conv", "owner", 1L, null).toToolContext(), "invocation", "provider-id");
     }

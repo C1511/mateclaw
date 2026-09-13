@@ -81,7 +81,7 @@ public class ExecutionEvidenceRecorder {
                 observedContext = sink.attach(new ToolContext(values));
             }
             String result = callback.call(arguments, observedContext);
-            finish(attempt, sink, sink.state(), "Tool callback returned");
+            finish(attempt, sink, null, "Tool callback returned");
             return result;
         } catch (RuntimeException | Error error) {
             AttemptState state = error instanceof CancellationException || Thread.currentThread().isInterrupted()
@@ -91,8 +91,9 @@ public class ExecutionEvidenceRecorder {
         }
     }
 
-    private void finish(ExecutionAttempt attempt, ExecutionObservationSink sink, AttemptState state, String summary) {
-        sink.seal();
+    private void finish(ExecutionAttempt attempt, ExecutionObservationSink sink, AttemptState overrideState, String summary) {
+        var captured = sink.sealAndSnapshot();
+        AttemptState state = overrideState != null ? overrideState : captured.state();
         if (attempt == null) return;
         long began = System.nanoTime();
         try {
@@ -100,7 +101,7 @@ public class ExecutionEvidenceRecorder {
                 failure("owner_lost");
                 return;
             }
-            var observations = new ArrayList<>(sink.observations());
+            var observations = new ArrayList<>(captured.observations());
             observations.add(new EvidenceObservation("callback", EvidenceKind.TOOL_RETURNED,
                     state == AttemptState.SUCCEEDED ? EvidenceResult.OBSERVED
                             : state == AttemptState.UNKNOWN || state == AttemptState.CANCELLED

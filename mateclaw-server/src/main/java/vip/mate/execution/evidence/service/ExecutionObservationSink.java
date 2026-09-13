@@ -46,6 +46,16 @@ public final class ExecutionObservationSink {
     public synchronized List<EvidenceObservation> observations() { return List.copyOf(observations); }
     public synchronized void seal() { sealed = true; }
 
+    public record Snapshot(AttemptState state, List<EvidenceObservation> observations) {
+        public Snapshot { observations = List.copyOf(observations); }
+    }
+
+    /** State and rows share one linearization point; later observations are ignored. */
+    public synchronized Snapshot sealAndSnapshot() {
+        sealed = true;
+        return new Snapshot(state, observations);
+    }
+
     /** Called by the process adapter, never by parsing a tool's returned text. */
     public void command(Integer exitCode, boolean timedOut, boolean cancelled, boolean blocked) {
         command(exitCode, timedOut, cancelled, blocked, null);
