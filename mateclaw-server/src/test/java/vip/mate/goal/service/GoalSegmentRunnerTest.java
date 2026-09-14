@@ -224,6 +224,44 @@ class GoalSegmentRunnerTest {
         verify(inputQueue).consume(eq(104L),anyString(),any());
     }
 
+    @Test void newUnmanagedGoalDoesNotRunLegacyUnknownInputFromManagedHistory() {
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var approvalRuns=mock(GoalApprovalRunService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner,"approvalRuns",approvalRuns);
+        when(approvalRuns.hasManagedGoalHistory("conv","2")).thenReturn(true);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(105L,"conv",2L,"alice",
+                "old unknown instruction",List.of(),"queued",null,null,null,
+                now,now,null,null));
+        when(agents.chatStructuredStream(eq(2L),anyString(),eq("conv"),eq("alice"),isNull(),any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("incorrect execution",null)));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents,never()).chatStructuredStream(any(),any(),any(),any(),any(),any());
+        verify(inputQueue).consume(eq(105L),anyString(),any());
+    }
+
+    @Test void explicitlyUnselectedInputStillRunsForUnmanagedGoal() {
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var approvalRuns=mock(GoalApprovalRunService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner,"approvalRuns",approvalRuns);
+        when(approvalRuns.hasManagedGoalHistory("conv","2")).thenReturn(true);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(106L,"conv",2L,"alice",
+                "explicit unselected instruction",List.of(),"queued",null,null,null,
+                now,now,42L,0L));
+        when(agents.chatStructuredStream(eq(2L),anyString(),eq("conv"),eq("alice"),isNull(),any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("output",null),
+                        AgentService.StreamDelta.event("finish_reason",Map.of("reason","normal"))));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents).chatStructuredStream(eq(2L),eq("explicit unselected instruction"),
+                eq("conv"),eq("alice"),isNull(),any());
+        verify(inputQueue).consume(eq(106L),anyString(),any());
+    }
+
     @Test void workerCancellationPersistsPartialEvidenceAndReleasesAdmission() throws Exception {
         var subscribed=new java.util.concurrent.CountDownLatch(1);
         var toolCancelled=new java.util.concurrent.atomic.AtomicBoolean();

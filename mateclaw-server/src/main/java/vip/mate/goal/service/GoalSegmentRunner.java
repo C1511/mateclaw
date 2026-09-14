@@ -150,7 +150,9 @@ public class GoalSegmentRunner {
                         return new SegmentOutcome.Cancelled("paused");
                     boolean required=currentGoal!=null && currentGoal.isJsonAcceptanceRequired();
                     boolean selected=queued.selectedGoalId()!=null && queued.selectedGoalId()>0;
-                    if (required || selected) {
+                    boolean ambiguousLegacy=queued.selectedGoalId()==null && !required && approvalRuns!=null
+                            && approvalRuns.hasManagedGoalHistory(convId,String.valueOf(goal.getAgentId()));
+                    if (required || selected || ambiguousLegacy) {
                         var queuedOrigin=ChatOrigin.web(convId,queued.createdBy(),goal.getWorkspaceId(),
                                 null,null,queued.requesterUserId()).withAgent(goal.getAgentId())
                                 .withSelectedGoalId(queued.selectedGoalId());
