@@ -44,6 +44,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private vip.mate.goal.service.GoalRunCoordinator coordinator;
     @Autowired private vip.mate.goal.service.GoalRecoveryService recovery;
     @Autowired private vip.mate.goal.service.GoalAttemptStore attempts;
+    @Autowired private vip.mate.approval.ApprovalWorkflowService approvals;
 
     private String alice;
     private String bob;
@@ -685,6 +686,44 @@ class GoalJsonAcceptanceIntegrationTest {
     private GoalEntity runtimeComplete(GoalEntity goal, GoalEvaluationResult evaluation, vip.mate.agent.context.ChatOrigin origin, boolean automatic) {
         return automatic ? goals.markRuntimeEvaluatedCompleted(goal.getId(), evaluation, origin)
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"account", "scheduled", "legacy"})
+    void persistedApprovalOriginRetainsIdentityButCannotOverrideCurrentAuthorization(String kind) {
+        GoalEntity goal = goal(kind.equals("scheduled"));
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = kind.equals("scheduled") ? claimed(goal) : null;
+        var origin = run != null ? attemptOrigin(goal, run) : kind.equals("legacy")
+            ? vip.mate.agent.context.ChatOrigin.web(goal.getConversationId(), alice, 1L, null).withAgent(1L)
+            : accountOrigin(goal, alice);
+        String pending;
+        vip.mate.agent.context.ChatOriginHolder.set(origin);
+        try {
+            pending = approvals.createPending(goal.getConversationId(), alice, "read_file", "{}", "offline origin fixture",
+                "[]", null, "1");
+        } finally { vip.mate.agent.context.ChatOriginHolder.clear(); }
+        String persisted = jdbc.queryForObject("SELECT chat_origin FROM mate_tool_approval WHERE pending_id=?", String.class, pending);
+        assertNotNull(persisted);
+        var consumed = approvals.resolveAndConsume(pending, alice).consumedSnapshot();
+        assertNotNull(consumed);
+        assertEquals(persisted, consumed.getChatOrigin());
+        var restored = approvals.restoreChatOrigin(consumed.getChatOrigin());
+        assertEquals(origin.requesterUserId(), restored.requesterUserId());
+        assertEquals(origin.executionAttribution(), restored.executionAttribution());
+        var replay = restored.withApprovalId(pending);
+        assertEquals(pending, replay.executionAttribution().approvalId());
+        assertEquals("CONSUMED", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pending));
+        if (kind.equals("legacy")) {
+            assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(replay, "report", publication(0, "{\"summary\":true}")));
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+        } else {
+            artifacts.publishForRuntime(replay, "report", publication(0, "{\"summary\":true}"));
+            if (run != null) jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?",
+                java.time.Instant.now().minusSeconds(1).getEpochSecond(), run.attempt().id());
+            else jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
+            assertThrows(MateClawException.class, () -> bindings.snapshotForRuntime(replay),
+                "Persisted approval is not a replacement for the current account or attempt lease");
+        }
     }
 
     @ParameterizedTest

@@ -60,3 +60,5 @@ Built-in shell/code execution is not OS-isolated from the service host. Selectin
 Recovery attempts receive guidance to inspect existing evidence before repeating work. If the first recovered segment is deferred before execution, its recovery context is retained for the next claim. Ordinary continuation after an executed segment does not become a new recovery.
 
 From V199, queued Web input stores the authenticated account ID at enqueue time, and ordinary Web replay carries the conversation workspace. Managed operations still recheck the account, ownership and current requirements. Legacy queue items do not gain an asserted identity from a username; users must resend an authenticated request for managed JSON operations. Persistent Goal workers retain their existing attempt-owner validation when consuming input; this does not introduce an account path without a lease check.
+
+Approval replay restores the persisted runtime identity; approval does not renew an expired attempt lease or override account revocation. Legacy snapshots without an authenticated account ID cannot gain managed JSON access from a display username alone.
