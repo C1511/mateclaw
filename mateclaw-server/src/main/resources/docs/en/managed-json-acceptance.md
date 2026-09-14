@@ -64,3 +64,5 @@ From V199, queued Web input stores the authenticated account ID at enqueue time,
 Approval replay restores the persisted runtime identity; approval does not renew an expired attempt lease or override account revocation. Legacy snapshots without an authenticated account ID cannot gain managed JSON access from a display username alone.
 
 JWT requests match the signed userId to the current enabled account ID. Recreating an account with the same username does not let the old token modify managed requirements or acquire the new runtime identity. A missing or malformed ID requires a fresh login. Sliding renewal retains the validated account identity. Managed HTTP operations also lock and recheck the authenticated account ID inside their transaction, retaining that lock until the read or write finishes. A username alone or an in-flight identity whose account was replaced cannot access these endpoints.
+
+After Web approval, Plan execution restores the original plan and approved call, retaining the requester and managed acceptance requirements. Approval itself does not replace a JSON check or complete the goal.

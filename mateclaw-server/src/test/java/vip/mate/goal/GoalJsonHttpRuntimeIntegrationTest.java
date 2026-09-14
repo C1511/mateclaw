@@ -52,6 +52,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @Autowired private GoalRecoveryService recovery;
     @Autowired private GoalSegmentRunner runner;
     @Autowired private GoalAttemptStore attempts;
+    @Autowired private vip.mate.approval.ApprovalWorkflowService approvals;
+    @Autowired private vip.mate.tool.guard.repository.ToolGuardRuleMapper guardRules;
+    @Autowired private vip.mate.tool.guard.engine.ToolGuardRuleRegistry guardRegistry;
+    @Autowired private vip.mate.tool.guard.service.ToolGuardConfigService guardConfig;
     @LocalServerPort private int port;
 
     @org.junit.jupiter.api.BeforeEach
@@ -74,8 +78,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
         "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true",
         "false,supervised,true", "true,supervised,true", "false,supervised-recovered,true", "true,supervised-recovered,true",
-        "false,supervised,false", "true,supervised,false", "false,supervised-recovered,false", "true,supervised-recovered,false"})
+        "false,supervised,false", "true,supervised,false", "false,supervised-recovered,false", "true,supervised-recovered,false",
+        "false,approval,true", "true,approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
+        boolean approval = entry.equals("approval");
         boolean supervised = entry.startsWith("supervised");
         boolean scheduled = entry.equals("scheduled") || entry.equals("recovered") || supervised;
         boolean reuse = entry.equals("reuse");
@@ -152,7 +158,13 @@ class GoalJsonHttpRuntimeIntegrationTest {
         AtomicInteger calls = new AtomicInteger();
         java.util.concurrent.atomic.AtomicReference<String> revision = new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<String> originalCheck = new java.util.concurrent.atomic.AtomicReference<>();
+        var planApprovalReplay = new java.util.concurrent.atomic.AtomicBoolean();
         org.mockito.stubbing.Answer<ChatResponse> script = invocation -> {
+            if (approval && plan && planApprovalReplay.compareAndSet(true, false)) {
+                // Plan replay asks again for the persisted approved call; ReAct forces it without an LLM call.
+                return new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(new AssistantMessage.ToolCall("approved-read", "function", "getManagedGoalJsonSlots", "{}"))).build())));
+            }
             Prompt prompt = invocation.getArgument(0);
             int step = calls.getAndIncrement();
             if (recovered && step == (plan ? 1 : 0)) {
@@ -253,7 +265,42 @@ class GoalJsonHttpRuntimeIntegrationTest {
         when(model.getDefaultOptions()).thenReturn(org.springframework.ai.chat.prompt.ChatOptions.builder().model("json-http-fixture").build());
         when(modelFactory.buildFor(any(), any())).thenReturn(model);
         String message = "Produce, publish, check and complete the managed JSON report.";
-        if (queued) {
+        if (approval) {
+            var rule = new vip.mate.tool.guard.model.ToolGuardRuleEntity();
+            rule.setId(IdWorker.getId()); rule.setRuleId("json-http-approval-" + goal.getId());
+            rule.setName("Offline managed JSON approval fixture"); rule.setDescription("Exercise the real approval replay path");
+            rule.setToolName("getManagedGoalJsonSlots"); rule.setParamName("args");
+            rule.setCategory("RESOURCE_ABUSE"); rule.setSeverity("MEDIUM"); rule.setDecision("NEEDS_APPROVAL");
+            rule.setPattern("getManagedGoalJsonSlots"); rule.setBuiltin(false); rule.setEnabled(true); rule.setPriority(1000); rule.setDeleted(0);
+            guardRules.insert(rule); guardRegistry.reload();
+            var guard = guardConfig.getConfig(); guard.setEnabled(true); guardConfig.updateConfig(guard);
+            try {
+                String waiting = requestBody("POST", "/api/v1/chat/stream", token,
+                        Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
+                JsonNode pending = request("GET", "/api/v1/chat/" + conversation + "/pending-approvals", token, null).path("data");
+                assertEquals(1, pending.size(), waiting);
+                String pendingId = pending.get(0).path("pendingId").asText();
+                assertEquals("getManagedGoalJsonSlots", pending.get(0).path("toolName").asText());
+                assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+                assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+                String persistedOrigin = jdbc.queryForObject("SELECT chat_origin FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId);
+                assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
+                Long approvedPlan = plan ? jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation) : null;
+                planApprovalReplay.set(plan);
+                String replay = requestBody("POST", "/api/v1/chat/stream", token,
+                        Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", "/approve", "pendingApprovalId", pendingId));
+                assertTrue(replay.contains("Managed JSON fixture completed."), replay);
+                assertEquals("CONSUMED", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId));
+                if (plan) {
+                    assertEquals(approvedPlan, jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation),
+                            "Approval replay must finish the original plan without creating a replacement");
+                    assertEquals("completed", jdbc.queryForObject("SELECT status FROM mate_plan WHERE id=?", String.class, approvedPlan));
+                }
+            } finally {
+                jdbc.update("DELETE FROM mate_tool_guard_rule WHERE id=?", rule.getId());
+                guardRegistry.reload();
+            }
+        } else if (queued) {
             var response = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                 try {
                     return requestBody("POST", "/api/v1/chat/stream", token,
