@@ -1367,15 +1367,25 @@ public class ChatController {
                                                        String username, boolean approve) {
         if (goalApprovalRuns != null && jsonAcceptance != null) {
             var origin = approvalService.restoreChatOrigin(pending.getChatOrigin());
-            if (origin != null && goalApprovalRuns.requiresCurrentApprover(origin.withApprovalId(pending.getPendingId()))) {
+            if (approve && (origin == null || origin.conversationId() == null
+                    || origin.requesterUserId() == null && (origin.executionAttribution() == null
+                            || origin.executionAttribution().goalId() == null))
+                    && goalApprovalRuns.hasManagedGoalHistory(pending.getConversationId(), pending.getAgentId())) {
+                throw new vip.mate.exception.MateClawException(409,
+                        "Managed Goal approval origin is unavailable; start a new request");
+            }
+            if (origin != null) origin = origin.withApprovalId(pending.getPendingId());
+            if (origin != null && goalApprovalRuns.requiresCurrentApprover(origin)) {
+                var capturedOrigin = origin;
                 Long currentUserId = requesterUserIdOf(auth);
                 return jsonAcceptance.withAuthenticatedUser(currentUserId, username, current -> {
-                    var attribution = origin.executionAttribution();
-                    if (attribution == null || attribution.goalId() == null) {
-                        if (!java.util.Objects.equals(currentUserId, origin.requesterUserId())) {
+                    var attribution = capturedOrigin.executionAttribution();
+                    if (attribution == null || attribution.goalAttemptId() == null) {
+                        if (!java.util.Objects.equals(currentUserId, capturedOrigin.requesterUserId())) {
                             throw new vip.mate.exception.MateClawException(403, "Approval belongs to another account");
                         }
                     }
+                    goalApprovalRuns.validateCapturedForApproval(capturedOrigin, current, approve);
                     return approve ? approvalService.resolveAndConsume(pending.getPendingId(), current)
                             : approvalService.resolve(pending.getPendingId(), current, "denied");
                 });

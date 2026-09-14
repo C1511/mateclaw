@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.context.ChatOriginHolder;
+import vip.mate.goal.service.GoalApprovalRunService;
 import vip.mate.approval.event.ApprovalResolutionEvent;
 import vip.mate.approval.event.WorkflowApprovalResolvedEvent;
 import vip.mate.approval.model.ToolApprovalEntity;
@@ -62,6 +63,8 @@ public class ApprovalWorkflowService implements ApplicationRunner {
      *  publish is a no-op. */
     @Autowired(required = false)
     private ApplicationEventPublisher events;
+    @Autowired(required = false)
+    private GoalApprovalRunService goalApprovalRuns;
 
     /**
      * GC scheduler — owns the 5-minute clock for the entire approval state machine
@@ -230,18 +233,17 @@ public class ApprovalWorkflowService implements ApplicationRunner {
                                 String toolName, String toolArguments, String reason,
                                 String toolCallPayload, String siblingToolCalls, String agentId,
                                 GuardEvaluation evaluation) {
+        // Capture the graph-bound origin and selected Goal before creating
+        // the pending row. Its Goal may change while the approval waits, but
+        // the persisted snapshot retains the identity it had at creation.
+        ChatOrigin origin = ChatOriginHolder.get();
+        if (goalApprovalRuns != null) origin = goalApprovalRuns.captureSelectedGoal(origin);
+        String chatOriginJson = serializeChatOrigin(origin);
+
         // 1. 内存层
         String pendingId = approvalService.createPending(
                 conversationId, userId, toolName, toolArguments, reason,
                 toolCallPayload, siblingToolCalls, agentId);
-
-        // RFC-063r §2.12: capture the originating ChatOrigin from the holder.
-        // The holder was set by AgentService.{chat,chatStream,...} for the
-        // duration of the agent invocation that produced this approval — so
-        // it is non-null for IM / web triggered tool calls. Snapshot is
-        // serialized once here and persisted on the DB row so cross-restart
-        // replays keep the channel binding.
-        String chatOriginJson = serializeChatOrigin(ChatOriginHolder.get());
 
         // 2. 增强内存记录
         approvalService.getPending(pendingId).ifPresent(pending -> {

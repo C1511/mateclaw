@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import reactor.core.publisher.Flux;
 import vip.mate.MateClawApplication;
+import vip.mate.agent.context.ChatOrigin;
 import vip.mate.goal.model.*;
 import vip.mate.goal.service.*;
 import vip.mate.memory.spi.MemoryManager;
@@ -53,6 +54,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @Autowired private GoalRecoveryService recovery;
     @Autowired private GoalSegmentRunner runner;
     @Autowired private GoalAttemptStore attempts;
+    @Autowired private GoalApprovalRunService approvalRuns;
     @Autowired private vip.mate.approval.ApprovalWorkflowService approvals;
     @Autowired private vip.mate.tool.guard.repository.ToolGuardRuleMapper guardRules;
     @Autowired private vip.mate.tool.guard.engine.ToolGuardRuleRegistry guardRegistry;
@@ -87,11 +89,15 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,foreign-approval,true", "true,foreign-approval,true",
         "false,scheduled-foreign-approval,true", "true,scheduled-foreign-approval,true",
         "false,scheduled-reassigned-approval,true", "true,scheduled-reassigned-approval,true",
-        "false,reassigned-approval,true", "true,reassigned-approval,true"})
+        "false,reassigned-approval,true", "true,reassigned-approval,true",
+        "false,terminal-approval,true", "true,terminal-approval,true",
+        "false,legacy-terminal-approval,true", "true,legacy-terminal-approval,true",
+        "false,originless-terminal-approval,true", "true,originless-terminal-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean approval = entry.endsWith("approval");
         boolean doubleApproval = entry.equals("scheduled-double-approval");
         boolean reassigned = entry.contains("reassigned");
+        boolean terminal = entry.contains("terminal-");
         boolean detached = entry.contains("detached");
         boolean foreign = entry.contains("foreign");
         boolean supervised = entry.startsWith("supervised");
@@ -333,8 +339,51 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     assertNotNull(approvals.restoreChatOrigin(persistedOrigin).executionAttribution(), persistedOrigin);
                     assertEquals(run.attempt().id(), approvals.restoreChatOrigin(persistedOrigin).executionAttribution().goalAttemptId());
                 }
-                else assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
+                else {
+                    assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
+                    assertEquals(goal.getId(), approvals.restoreChatOrigin(persistedOrigin).selectedGoalId());
+                    var approvalReplayOrigin = approvals.restoreChatOrigin(persistedOrigin)
+                            .withSelectedGoalId(null).withApprovalId(pendingId);
+                    assertEquals(goal.getId(), approvalRuns.captureSelectedGoal(approvalReplayOrigin).selectedGoalId(),
+                            "A replayed interactive approval can create another selected approval");
+                }
                 Long approvedPlan = plan ? jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation) : null;
+                if (terminal) {
+                    if (entry.startsWith("legacy-")) {
+                        var oldOrigin = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(persistedOrigin);
+                        oldOrigin.remove("selectedGoalId");
+                        String oldSnapshot = json.writeValueAsString(oldOrigin);
+                        approvals.getPending(pendingId).orElseThrow().setChatOrigin(oldSnapshot);
+                        jdbc.update("UPDATE mate_tool_approval SET chat_origin=? WHERE pending_id=?", oldSnapshot, pendingId);
+                    } else if (entry.startsWith("originless-")) {
+                        approvals.getPending(pendingId).orElseThrow().setChatOrigin(null);
+                        jdbc.update("UPDATE mate_tool_approval SET chat_origin=NULL WHERE pending_id=?", pendingId);
+                    }
+                    goals.abandon(goal.getId(), username);
+                    assertEquals(GoalStatus.ABANDONED, goals.getById(goal.getId()).getStatus());
+                    if (entry.startsWith("legacy-")) {
+                        var oldApprovalOrigin = approvals.restoreChatOrigin(
+                                approvals.getPending(pendingId).orElseThrow().getChatOrigin()).withApprovalId(pendingId);
+                        assertNull(oldApprovalOrigin.selectedGoalId());
+                        assertTrue(approvalRuns.requiresCurrentApprover(oldApprovalOrigin),
+                                "An old approval pending before Goal termination must remain managed");
+                    }
+                    var laterUnselected = approvalRuns.captureSelectedGoal(
+                            ChatOrigin.web(conversation, username, 1L, null, null, userId).withAgent(agentId));
+                    assertEquals(0L, laterUnselected.selectedGoalId());
+                    assertFalse(approvalRuns.requiresCurrentApprover(laterUnselected.withApprovalId(pendingId)),
+                            "A newly unselected approval must retain the legacy route");
+                    String rejected = requestBody("POST", "/api/v1/chat/stream", token,
+                            Map.of("agentId", String.valueOf(agentId), "conversationId", conversation,
+                                    "message", "/approve", "pendingApprovalId", pendingId));
+                    assertEquals("PENDING", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId), rejected);
+                    assertEquals(GoalStatus.ABANDONED, goals.getById(goal.getId()).getStatus());
+                    requestBody("POST", "/api/v1/chat/stream", token,
+                            Map.of("agentId", String.valueOf(agentId), "conversationId", conversation,
+                                    "message", "/deny", "pendingApprovalId", pendingId));
+                    assertEquals("DENIED", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId));
+                    return;
+                }
                 if (reassigned) {
                     var replaceOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
                     doAnswer(invocation -> {
