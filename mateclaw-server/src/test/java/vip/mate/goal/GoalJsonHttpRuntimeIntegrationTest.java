@@ -77,7 +77,9 @@ class GoalJsonHttpRuntimeIntegrationTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
-        "false,scheduled,true", "true,scheduled,true", "false,scheduled-queued,true", "true,scheduled-queued,true", "false,recovered,true", "true,recovered,true",
+        "false,scheduled,true", "true,scheduled,true", "false,scheduled-queued,true", "true,scheduled-queued,true",
+        "false,scheduled-queued-foreign,true", "true,scheduled-queued-foreign,true",
+        "false,scheduled-queued-paused,true", "true,scheduled-queued-paused,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
         "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true",
         "false,supervised,true", "true,supervised,true", "false,supervised-recovered,true", "true,supervised-recovered,true",
@@ -591,6 +593,55 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 runner.cancel(goal.getId());
             }
         } else if (scheduled) {
+            if (entry.equals("scheduled-queued-paused")) {
+                var queuedInput = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, json).enqueue(
+                        conversation, agentId, username, message, List.of(), userId, goal.getId(),
+                        java.time.LocalDateTime.now());
+                goals.pause(goal.getId(), username);
+                SegmentOutcome pausedOutcome = runner.run(run, message, false);
+                assertInstanceOf(SegmentOutcome.Cancelled.class, pausedOutcome);
+                assertEquals(0, calls.get(), "Paused Goal must not start a model call");
+                assertEquals("queued", jdbc.queryForObject(
+                        "SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queuedInput.id()));
+                assertTrue(coordinator.settle(run, pausedOutcome, java.time.LocalDateTime.now()));
+                goals.resume(goal.getId(), username);
+                var resumedRun = claim(goal);
+                SegmentOutcome resumedOutcome = runner.run(resumedRun, message, false);
+                assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus(), resumedOutcome.toString());
+                assertEquals("consumed", jdbc.queryForObject(
+                        "SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queuedInput.id()));
+                assertTrue(coordinator.settle(resumedRun, resumedOutcome, java.time.LocalDateTime.now()));
+                assertEquals("completed", continuations.get(goal.getId()).state());
+                return;
+            }
+            if (entry.equals("scheduled-queued-foreign")) {
+                String foreignConversation = UUID.randomUUID().toString();
+                jdbc.update("INSERT INTO mate_conversation(id,conversation_id,username,workspace_id,agent_id,model_provider,model_name,create_time,update_time,deleted) VALUES (?,?,?,1,?,'dashscope','json-http-fixture',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)",
+                        IdWorker.getId(), foreignConversation, username, agentId);
+                var foreignCreate = new GoalCreateRequest(); foreignCreate.setConversationId(foreignConversation);
+                foreignCreate.setAgentId(agentId); foreignCreate.setWorkspaceId(1L);
+                foreignCreate.setTitle("Other selected Goal"); foreignCreate.setDescription("Separate conversation");
+                GoalEntity foreignGoal = goals.create(foreignCreate, username);
+                var queuedInput = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, json).enqueue(
+                        conversation, agentId, username, "Do work for the other Goal", List.of(), userId,
+                        foreignGoal.getId(), java.time.LocalDateTime.now());
+
+                SegmentOutcome outcome = runner.run(run, message, false);
+
+                assertInstanceOf(SegmentOutcome.Continue.class, outcome);
+                assertEquals(0, calls.get(), "The foreign queued selection must not start a model call");
+                assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+                assertEquals("consumed", jdbc.queryForObject(
+                        "SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queuedInput.id()));
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_message WHERE conversation_id=? AND role='user' AND content=?",
+                        Integer.class, conversation, "Do work for the other Goal"));
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_message WHERE conversation_id=? AND role='assistant' AND content LIKE ?",
+                        Integer.class, conversation, "%was not run because its selected Goal%"));
+                assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?",
+                        Integer.class, goal.getId()));
+                assertTrue(coordinator.settle(run, outcome, java.time.LocalDateTime.now()));
+                return;
+            }
             Long queuedInputId = null;
             if (entry.equals("scheduled-queued")) {
                 var queuedInput = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, json).enqueue(
