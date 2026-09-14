@@ -100,9 +100,9 @@ public class GoalJsonBindingService {
         jdbc.update("""
                 INSERT INTO mate_goal_json_binding
                 (goal_id,criterion_key,requirement_revision,evaluation_revision,artifact_id,generation,sha256,
-                recipe_id,recipe_revision,check_status,checked_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                recipe_id,recipe_revision,check_status,checked_at,expires_at,expires_epoch_second) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, goal.id(), key, requirement.revision(), evaluationRevision, current.artifactId(), current.generation(), current.sha256(),
-                result.recipeId(), result.recipeRevision(), result.status(), Timestamp.from(checkedAt), Timestamp.from(current.expiresAt()));
+                result.recipeId(), result.recipeRevision(), result.status(), Timestamp.from(checkedAt), Timestamp.from(current.expiresAt()), current.expiresAt().getEpochSecond());
         jdbc.update("UPDATE mate_agent_goal SET version=version+1,update_time=CURRENT_TIMESTAMP WHERE id=?", goal.id());
         return new Check(key, requirement.revision(), current.artifactId(), current.generation(), result.status(), result.missingFields(),
                 result.recipeId(), result.recipeRevision(), checkedAt, current.expiresAt(), "MATCH".equals(result.status()));
@@ -168,7 +168,7 @@ public class GoalJsonBindingService {
                 ON a.artifact_id=s.artifact_id AND a.goal_id=s.goal_id AND a.artifact_slot=s.artifact_slot AND a.generation=s.generation
                 WHERE s.goal_id=? AND s.artifact_slot=? FOR UPDATE
                 """, (r, i) -> new Stored(r.getString("artifact_id"), r.getLong("generation"), r.getString("json_body"),
-                r.getString("sha256"), r.getInt("byte_length"), r.getTimestamp("expires_at").toInstant()), goalId, slot);
+                r.getString("sha256"), r.getInt("byte_length"), Instant.ofEpochSecond(r.getLong("expires_epoch_second"))), goalId, slot);
         return rows.size() == 1 ? rows.getFirst() : null;
     }
 
@@ -176,7 +176,7 @@ public class GoalJsonBindingService {
         var rows = jdbc.query("SELECT * FROM mate_goal_json_binding WHERE goal_id=? AND criterion_key=? FOR UPDATE",
                 (r, i) -> new Binding(r.getLong("requirement_revision"), r.getLong("evaluation_revision"), r.getString("artifact_id"),
                         r.getLong("generation"), r.getString("sha256"), r.getString("recipe_id"), r.getInt("recipe_revision"),
-                        r.getString("check_status"), r.getTimestamp("expires_at").toInstant()), goalId, key);
+                        r.getString("check_status"), Instant.ofEpochSecond(r.getLong("expires_epoch_second"))), goalId, key);
         return rows.size() == 1 ? rows.getFirst() : null;
     }
 

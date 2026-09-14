@@ -405,7 +405,7 @@ class GoalJsonAcceptanceIntegrationTest {
         assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, version), alice));
         var next = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":true}"), alice);
         bindings.check(goal.getId(), "r", checkRequest(1, next), alice);
-        jdbc.update("UPDATE mate_goal_json_artifact SET expires_at=? WHERE artifact_id=?", java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), next.artifactId());
+        jdbc.update("UPDATE mate_goal_json_artifact SET expires_epoch_second=? WHERE artifact_id=?", java.time.Instant.now().minusSeconds(1).getEpochSecond(), next.artifactId());
         assertEquals("EXPIRED", bindings.state(goal.getId(), alice).getFirst().status());
         assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, next), alice));
     }
@@ -488,7 +488,7 @@ class GoalJsonAcceptanceIntegrationTest {
                 case "requirement" -> { acceptance.configure(goal.getId(), "r", request(1, "summary", "sources"), alice); revision = 2; }
                 case "definition" -> { GoalUpdateRequest edit = new GoalUpdateRequest(); edit.setDescription("new definition"); goals.update(goal.getId(), edit, alice); }
                 case "superseded" -> version = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":true}"), alice);
-                case "expired" -> jdbc.update("UPDATE mate_goal_json_artifact SET expires_at=? WHERE artifact_id=?", java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), version.artifactId());
+                case "expired" -> jdbc.update("UPDATE mate_goal_json_artifact SET expires_epoch_second=? WHERE artifact_id=?", java.time.Instant.now().minusSeconds(1).getEpochSecond(), version.artifactId());
                 case "corrupt" -> jdbc.update("UPDATE mate_goal_json_artifact SET json_body='{}' WHERE artifact_id=?", version.artifactId());
             }
             assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null), invalidation);

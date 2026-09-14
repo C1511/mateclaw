@@ -153,16 +153,17 @@ public class ManagedGoalJsonService {
         int count = jdbc.queryForList("SELECT artifact_id FROM mate_goal_json_artifact WHERE goal_id=? FOR UPDATE", String.class, goal.id()).size();
         if (count >= 32) throw failure(409, "Managed JSON limit reached (32 versions per goal)");
         long next = Math.addExact(generation, 1);
-        // Whole seconds also round-trip through MySQL TIMESTAMP without fractional precision.
+        // Epoch seconds are authoritative across JDBC/JVM timezone changes; SQL timestamps are audit-only.
         Instant created = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         Artifact artifact = new Artifact(UUID.randomUUID().toString(), slot, next, digest(bytes), bytes.length,
                 producerKind, created, created.plusSeconds(86_400));
         jdbc.update("""
                 INSERT INTO mate_goal_json_artifact
-                (artifact_id,goal_id,artifact_slot,generation,json_body,sha256,byte_length,producer_kind,producer_id,created_at,expires_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                (artifact_id,goal_id,artifact_slot,generation,json_body,sha256,byte_length,producer_kind,producer_id,created_at,expires_at,created_epoch_second,expires_epoch_second)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, artifact.artifactId(), goal.id(), slot, next, content, artifact.sha256(), bytes.length,
-                producerKind, producerId, Timestamp.from(created), Timestamp.from(artifact.expiresAt()));
+                producerKind, producerId, Timestamp.from(created), Timestamp.from(artifact.expiresAt()),
+                created.getEpochSecond(), artifact.expiresAt().getEpochSecond());
         if (generation == 0) jdbc.update("INSERT INTO mate_goal_json_slot(goal_id,artifact_slot,generation,artifact_id) VALUES (?,?,?,?)",
                 goal.id(), slot, next, artifact.artifactId());
         else jdbc.update("UPDATE mate_goal_json_slot SET generation=?,artifact_id=? WHERE goal_id=? AND artifact_slot=?",
@@ -188,7 +189,8 @@ public class ManagedGoalJsonService {
     private static Artifact artifact(java.sql.ResultSet r) throws java.sql.SQLException {
         return new Artifact(r.getString("artifact_id"), r.getString("artifact_slot"), r.getLong("generation"),
                 r.getString("sha256"), r.getInt("byte_length"), r.getString("producer_kind"),
-                r.getTimestamp("created_at").toInstant(), r.getTimestamp("expires_at").toInstant());
+                r.getLong("created_epoch_second") == 0 ? r.getTimestamp("created_at").toInstant() : Instant.ofEpochSecond(r.getLong("created_epoch_second")),
+                Instant.ofEpochSecond(r.getLong("expires_epoch_second")));
     }
 
     static String digest(byte[] bytes) {
