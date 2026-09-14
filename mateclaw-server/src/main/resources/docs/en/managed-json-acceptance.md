@@ -57,4 +57,6 @@ Validation snapshot (2026-09-14): the full default backend test run passed 5,249
 
 Built-in shell/code execution is not OS-isolated from the service host. Selecting JSON acceptance does not sandbox those tools, and the protocol cannot defend against host code that can access database credentials or files. Environment-name filtering and workspace path checks do not replace that isolation. Lease deadlines are calculated from absolute instants, including daylight-saving clock rollback; scheduling display fields remain local timestamps.
 
+Recovery attempts receive guidance to inspect existing evidence before repeating work. If the first recovered segment is deferred before execution, its recovery context is retained for the next claim. Ordinary continuation after an executed segment does not become a new recovery.
+
 From V199, queued Web input stores the authenticated account ID at enqueue time, and ordinary Web replay carries the conversation workspace. Managed operations still recheck the account, ownership and current requirements. Legacy queue items do not gain an asserted identity from a username; users must resend an authenticated request for managed JSON operations. Persistent Goal workers retain their existing attempt-owner validation when consuming input; this does not introduce an account path without a lease check.

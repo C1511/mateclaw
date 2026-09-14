@@ -135,6 +135,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
         org.mockito.stubbing.Answer<ChatResponse> script = invocation -> {
             Prompt prompt = invocation.getArgument(0);
             int step = calls.getAndIncrement();
+            if (recovered && step == (plan ? 1 : 0)) {
+                assertTrue(prompt.getInstructions().stream().anyMatch(message -> message.getText()!=null
+                    && message.getText().contains("Do not replay side effects whose outcome is unknown")),
+                    "Recovered execution must receive the existing-evidence guidance");
+            }
             if (plan && step == 0) {
                 return new ChatResponse(List.of(new Generation(new AssistantMessage(
                         "{\"needs_planning\":true,\"steps\":[\"Produce, publish, check and complete the managed JSON report\"]}"))));

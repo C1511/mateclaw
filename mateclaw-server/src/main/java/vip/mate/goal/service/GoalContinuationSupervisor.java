@@ -124,7 +124,11 @@ public class GoalContinuationSupervisor {
                 case CONTINUE -> { }
             }
             if(!coordinator.markRunning(claimed,now)) return;
-            SegmentOutcome outcome = runner.run(claimed,decision.prompt(),"running".equals(claimed.candidate().state()));
+            // Recovery requeues the projection as retry and gives the new attempt
+            // a durable parent; the old running-state check alone loses its guidance.
+            boolean recovered = claimed.attempt().parentAttemptId()!=null
+                    || "running".equals(claimed.candidate().state());
+            SegmentOutcome outcome = runner.run(claimed,decision.prompt(),recovered);
             if (outcome instanceof SegmentOutcome.Retry retry
                     && ("provider".equals(retry.category()) || "evaluation".equals(retry.category()))) {
                 activateProviderBackoff(LocalDateTime.now(clock));

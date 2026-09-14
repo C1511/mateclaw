@@ -49,9 +49,15 @@ public class GoalRunCoordinator {
         if(!continuations.claim(goal.getId(),token,now,until,nowEpoch,untilEpoch)) return null;
         GoalContinuationStore.Continuation claimed=continuations.get(goal.getId());
         String parentAttemptId=null;
-        if("restart_recovery".equals(candidate.reason())) {
-            var recent=attempts.listRecent(goal.getId(),1);
-            if(!recent.isEmpty()) parentAttemptId=recent.getFirst().id();
+        var recent=attempts.listRecent(goal.getId(),1);
+        if(!recent.isEmpty()) {
+            var previous=recent.getFirst();
+            // A recovered attempt may be deferred before reaching the provider.
+            // Keep that pending recovery context until a segment actually starts.
+            if("restart_recovery".equals(candidate.reason())
+                    || previous.parentAttemptId()!=null && "claimed".equals(previous.checkpointType())) {
+                parentAttemptId=previous.id();
+            }
         }
         GoalAttempt attempt=attempts.create(goal.getId(),goal.getConversationId(),parentAttemptId,
                 "continuation",token,until,null,now,untilEpoch);

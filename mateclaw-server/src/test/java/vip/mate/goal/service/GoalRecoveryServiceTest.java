@@ -78,6 +78,25 @@ class GoalRecoveryServiceTest {
         assertEquals(queued.id(),inputs.listQueued("conv").getFirst().id());
     }
 
+    @Test void recoveryContextSurvivesDeferralUntilTheFirstExecutedSegment() {
+        var old = coordinator.claim(continuations.get(1L), goal, now);
+        assertTrue(coordinator.markRunning(old, now));
+        var recoveryTime = now.plusSeconds(61);
+        assertEquals(1, recovery.recoverExpired(recoveryTime.atZone(java.time.ZoneId.systemDefault()).toInstant()));
+        var deferred = coordinator.claim(continuations.get(1L), goal, recoveryTime);
+        assertEquals(old.attempt().id(), deferred.attempt().parentAttemptId());
+        var later = now.plusSeconds(90);
+        assertTrue(coordinator.settle(deferred, new vip.mate.goal.model.SegmentOutcome.Defer("followup_cooldown", later), recoveryTime));
+        var resumed = coordinator.claim(continuations.get(1L), goal, later);
+        assertEquals(deferred.attempt().id(), resumed.attempt().parentAttemptId(),
+            "A pre-execution cooldown must not discard the pending recovery context");
+        assertTrue(coordinator.markRunning(resumed, later));
+        assertTrue(coordinator.checkpoint(resumed, "safe", "provider_started", null, later));
+        assertTrue(coordinator.settle(resumed, new vip.mate.goal.model.SegmentOutcome.Continue("unfinished"), later));
+        var next = coordinator.claim(continuations.get(1L), goal, continuations.get(1L).nextRunAt());
+        assertNull(next.attempt().parentAttemptId(), "Ordinary continuation after execution is not a fresh recovery");
+    }
+
     @Test void liveProjectionDoesNotAbortRecoveryOfOtherExpiredAttempts() {
         var live = coordinator.claim(continuations.get(1L), goal, now);
         assertTrue(coordinator.markRunning(live, now));
