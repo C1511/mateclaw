@@ -82,7 +82,7 @@ public class ActionNode implements NodeAction {
             "extract_document_text", "extract_pdf_text", "extract_docx_text",
             "detect_file_type",
             "getCurrentDateTime", "getCurrentDate", "getCurrentTime",
-            "listSubagents"
+            "listSubagents", "getManagedGoalJsonSlots"
     );
 
     private final ToolExecutionExecutor executor;
