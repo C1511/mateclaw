@@ -76,6 +76,11 @@
           <div v-else class="no-agent-hint">{{ $t('chat.selectAgent') }}</div>
         </div>
         <div class="chat-header-right">
+          <button v-if="currentConversationGoal" class="header-btn" type="button"
+            :title="$t('plans.goals')" :aria-label="$t('plans.goals')"
+            :aria-expanded="conversationGoalOpen" @click="conversationGoalOpen = true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          </button>
           <!-- Model selector — Issue #81 v2 R3: always pass full providers + show-all-states
                so unhealthy rows render as dimmed entries with status chips and a Fix
                button instead of disappearing entirely. -->
@@ -110,6 +115,10 @@
           </div>
         </div>
       </div>
+
+      <GoalsPanel v-if="currentConversationGoal && conversationGoalOpen" :key="currentConversationGoal.id"
+        :open="conversationGoalOpen" :goals="[currentConversationGoal]" :loading="false"
+        @close="conversationGoalOpen = false" />
 
       <TeamWorkerBanner
         v-if="workerRunContext"
@@ -302,7 +311,7 @@ let cachedAgents: import('@/types').Agent[] = []
 <script setup lang="ts">
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { defineAsyncComponent, ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { mcToast } from '@/composables/useMcToast'
@@ -350,6 +359,8 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { buildViewerModelProviders } from '@/utils/viewerModelProviders'
 import GoalSetInlinePrompt from '@/components/goal/GoalSetInlinePrompt.vue'
 import GoalSystemLine from '@/components/goal/GoalSystemLine.vue'
+
+const GoalsPanel = defineAsyncComponent(() => import('@/components/agents/GoalsPanel.vue'))
 
 // ============ Talk Mode ============
 const showTalkMode = ref(false)
@@ -1392,19 +1403,22 @@ watch([selectedAgentId, currentConversationId], () => {
 // avatar ring listens on goalStore.activeGoalByConv[cid]; without this
 // fetch the ring would only appear after an SSE event mutated the store.
 const goalStore = useGoalStore()
+const conversationGoalOpen = ref(false)
+const currentConversationGoal = computed(() => currentConversationId.value
+  ? goalStore.activeGoal(currentConversationId.value) : null)
+watch(() => currentConversationGoal.value?.id, () => { conversationGoalOpen.value = false })
+watch(currentConversationId, () => { conversationGoalOpen.value = false })
 const workspaceStore = useWorkspaceStore()
 const currentWorkspaceId = computed(() => workspaceStore.currentWorkspaceId ?? '1')
 const canConfigureModels = computed(() => workspaceStore.isGlobalAdmin)
 const modelSelectorEmptyHint = computed(() => canConfigureModels.value
   ? undefined
   : t('chat.noModelsAvailableContactAdmin'))
-watch(currentConversationId, async (cid) => {
-  // Skip un-persisted conversations: a brand-new empty chat has no goal yet
-  // and the lookup would only 403 (Not the owner). The ring is hydrated by the
-  // goal_created SSE event once the first turn lands.
-  if (cid && !isEphemeralConversation(cid)) {
-    await goalStore.loadActiveForConversation(cid)
-  }
+// The route may be restored before the conversation list finishes loading.
+// Observe persistence becoming known as well as the selected conversation id.
+watch(() => currentConversationId.value && !isEphemeralConversation(currentConversationId.value)
+  ? currentConversationId.value : null, async (cid) => {
+  if (cid) await goalStore.loadActiveForConversation(cid)
 }, { immediate: true })
 
 // Re-fetch the active goal when a turn finishes. A goal can be created or
