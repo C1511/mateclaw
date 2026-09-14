@@ -746,6 +746,49 @@ class GoalJsonAcceptanceIntegrationTest {
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
     }
 
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void approvalAfterSettledAttemptCannotReviveFenceButFreshAttemptCanReuseEvidence(boolean automatic) {
+        GoalEntity goal = goal(true);
+        goals.appendCriterion(goal.getId(), "report", alice);
+        var evaluation = new GoalEvaluationResult(1, "offline fixture", "completed", true, "fixture", 1, 0,
+                List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var version = artifacts.publishForRuntime(origin, "report", publication(0, "{\"summary\":false}"));
+        bindings.checkForRuntime(origin, "r", checkRequest(1, version));
+        String pending;
+        vip.mate.agent.context.ChatOriginHolder.set(origin);
+        try {
+            pending = approvals.createPending(goal.getConversationId(), alice, "getManagedGoalJsonSlots", "{}",
+                    "offline settled approval fixture", "[]", null, "1");
+        } finally { vip.mate.agent.context.ChatOriginHolder.clear(); }
+        assertTrue(coordinator.settle(run, new SegmentOutcome.AwaitApproval("awaiting_approval"), java.time.LocalDateTime.now()));
+        assertEquals("waiting_approval", continuations.get(goal.getId()).state());
+        assertNull(continuations.get(goal.getId()).currentAttemptId());
+        var consumed = approvals.resolveAndConsume(pending, alice).consumedSnapshot();
+        assertNotNull(consumed);
+        var replay = approvals.restoreChatOrigin(consumed.getChatOrigin()).withApprovalId(pending);
+        assertEquals(run.attempt().id(), replay.executionAttribution().goalAttemptId());
+        assertFalse(coordinator.renew(run, java.time.LocalDateTime.now()));
+        assertThrows(MateClawException.class, () -> bindings.snapshotForRuntime(replay));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(replay, "report", publication(1, "{\"summary\":true}")));
+        assertThrows(MateClawException.class, () -> bindings.checkForRuntime(replay, "r", checkRequest(1, version)));
+        assertThrows(MateClawException.class, () -> runtimeComplete(goal, evaluation, replay, automatic));
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        assertEquals(1, artifacts.list(goal.getId(), alice).getFirst().generation());
+        // Simulate the existing replay turn's completion signal, then use a newly claimed owner.
+        continuations.turnFinished(goal.getConversationId(), java.time.LocalDateTime.now());
+        var fresh = claimed(goal);
+        assertNotEquals(run.attempt().id(), fresh.attempt().id());
+        assertNotEquals(run.attempt().leaseToken(), fresh.attempt().leaseToken());
+        var freshOrigin = attemptOrigin(goal, fresh);
+        assertTrue(bindings.snapshotForRuntime(freshOrigin).checks().getFirst().acceptanceEligible());
+        assertEquals(GoalStatus.COMPLETED, runtimeComplete(goal, evaluation, freshOrigin, automatic).getStatus());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+    }
+
     @ParameterizedTest @ValueSource(strings = {"account", "scheduled", "legacy"})
     void persistedApprovalOriginRetainsIdentityButCannotOverrideCurrentAuthorization(String kind) {
         GoalEntity goal = goal(kind.equals("scheduled"));

@@ -65,4 +65,6 @@ Approval replay restores the persisted runtime identity; approval does not renew
 
 JWT requests match the signed userId to the current enabled account ID. Recreating an account with the same username does not let the old token modify managed requirements or acquire the new runtime identity. A missing or malformed ID requires a fresh login. Sliding renewal retains the validated account identity. Managed HTTP operations also lock and recheck the authenticated account ID inside their transaction, retaining that lock until the read or write finishes. A username alone or an in-flight identity whose account was replaced cannot access these endpoints.
 
-After Web approval, Plan execution restores the original plan and approved call, retaining the requester and managed acceptance requirements. Approval itself does not replace a JSON check or complete the goal.
+After interactive Web approval, Plan execution restores the original plan and approved call, retaining the requester and managed acceptance requirements. Approval itself does not replace a JSON check or complete the goal.
+
+When a background Goal settles into awaiting approval, its original attempt lease is released. Replaying that persisted identity cannot access managed artifacts or complete the Goal. A fresh attempt can reuse still-eligible evidence, but automatic transfer of a settled approval to a new lease is not yet provided; interactive approval verification does not cover this background path.
