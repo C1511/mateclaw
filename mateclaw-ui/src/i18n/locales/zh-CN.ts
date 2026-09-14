@@ -1,10 +1,10 @@
 export default {
   goalJsonArtifacts: {
     "title": "产物版本与检查",
-    "scope": "先发布 JSON 对象，再逐项检查。每版不可修改，最多1 MiB、有效期24小时。发布本身不会完成目标。",
+    "scope": "已有适用版本可直接检查；正文需要修改时再发布新版本。每版不可修改，最多1 MiB、有效期24小时。发布本身不会完成目标。",
     "refresh": "重新读取版本与检查",
     "quota": "已保存 {count} / 32 个版本。",
-    "quotaFull": "已达到版本上限，历史版本会保留。",
+    "quotaFull": "已达到版本上限，历史版本会保留。仍可检查当前有效版本。",
     "requirement": "要求修订 {revision} · 字段：{fields}",
     "version": "{slot} · 版本 {generation}",
     "expires": "有效期至：{time}",

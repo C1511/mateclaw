@@ -1,10 +1,10 @@
 export default {
   goalJsonArtifacts: {
     "title": "Versions and checks",
-    "scope": "Publish a JSON object, then check each requirement. Each version is immutable, at most 1 MiB, and valid for 24 hours. Publishing does not complete the goal.",
+    "scope": "Check a suitable current version directly; publish a new version when content needs changing. Each version is immutable, at most 1 MiB, and valid for 24 hours. Publishing does not complete the goal.",
     "refresh": "Reload versions and checks",
     "quota": "{count} of 32 versions saved.",
-    "quotaFull": "The version limit is reached; existing versions are preserved.",
+    "quotaFull": "The version limit is reached; existing versions are preserved. You can still check a current, unexpired version.",
     "requirement": "Requirement revision {revision} · Fields: {fields}",
     "version": "{slot} · version {generation}",
     "expires": "Expires: {time}",
