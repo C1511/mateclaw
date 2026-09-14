@@ -67,9 +67,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
         "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
-        "false,queued,true"})
+        "false,queued,true", "false,reuse,true", "true,reuse,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
+        boolean reuse = entry.equals("reuse");
         boolean queued = entry.equals("queued");
         boolean recovered = entry.equals("recovered");
         String username = "http-json-" + UUID.randomUUID();
@@ -102,6 +103,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
         JsonNode configured = request("PUT", "/api/v1/goals/" + goal.getId() + "/json-acceptance/requirements/r", token,
             Map.of("expectedRevision", "0", "artifactSlot", "report", "requiredFields", List.of("summary")));
         assertEquals(200, configured.path("code").asInt(), configured.toString());
+        if (reuse) {
+            for (long generation = 0; generation < 32; generation++) {
+                artifacts.publish(goal.getId(), "report", new ManagedGoalJsonService.PublishRequest(generation, "{\"summary\":false}"), username);
+            }
+        }
         GoalRunCoordinator.ClaimedRun run = null;
         if (scheduled) {
             jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=TRUE WHERE id=?", goal.getId());
@@ -161,17 +167,30 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 case 2 -> {
                     assertTrue(last.path("required").asBoolean(), String.valueOf(last));
                     revision.set(last.path("requirements").get(0).path("revision").asText());
-                    name = "publishManagedGoalJson";
-                    arguments = json.writeValueAsString(Map.of("artifactSlot", "report", "expectedGeneration", recovered ? "1" : "0", "jsonContent", "{\"summary\":false}"));
+                    if (reuse) {
+                        assertEquals(32, last.path("versionCount").asInt());
+                        JsonNode current = last.path("slots").get(0).path("current");
+                        name = "checkManagedGoalJson";
+                        arguments = json.writeValueAsString(Map.of("criterionKey", "r", "expectedRequirementRevision", revision.get(),
+                            "artifactId", current.path("artifactId").asText(), "expectedGeneration", current.path("generation").asText()));
+                    } else {
+                        name = "publishManagedGoalJson";
+                        arguments = json.writeValueAsString(Map.of("artifactSlot", "report", "expectedGeneration", recovered ? "1" : "0", "jsonContent", "{\"summary\":false}"));
+                    }
                 }
                 case 3 -> {
-                    assertEquals(scheduled ? "goal-attempt" : "account-runtime", last.path("producerKind").asText(), String.valueOf(last));
-                    name = "checkManagedGoalJson";
-                    arguments = json.writeValueAsString(Map.of("criterionKey", "r", "expectedRequirementRevision", revision.get(),
-                            "artifactId", last.path("artifactId").asText(), "expectedGeneration", last.path("generation").asText()));
+                    if (reuse) {
+                        assertTrue(last.path("acceptanceEligible").asBoolean(), String.valueOf(last));
+                        name = "getManagedGoalJsonSlots";
+                    } else {
+                        assertEquals(scheduled ? "goal-attempt" : "account-runtime", last.path("producerKind").asText(), String.valueOf(last));
+                        name = "checkManagedGoalJson";
+                        arguments = json.writeValueAsString(Map.of("criterionKey", "r", "expectedRequirementRevision", revision.get(),
+                                "artifactId", last.path("artifactId").asText(), "expectedGeneration", last.path("generation").asText()));
+                    }
                 }
                 case 4 -> {
-                    assertTrue(last.path("acceptanceEligible").asBoolean(), String.valueOf(last));
+                    assertTrue((reuse ? last.path("checks").get(0) : last).path("acceptanceEligible").asBoolean(), String.valueOf(last));
                     name = "completeGoal";
                 }
                 default -> {
@@ -248,6 +267,8 @@ class GoalJsonHttpRuntimeIntegrationTest {
         assertTrue(calls.get() >= (accepted ? 6 : 2) && calls.get() <= (accepted ? 10 : 4), "Bounded offline model calls: " + calls.get());
         if (!accepted) assertEquals(recovered ? 1 : 0,
             jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+        if (reuse) assertEquals(32, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()),
+            "Checking and completing a current version must not consume another publication");
         JsonNode currentRequirements = request("GET", "/api/v1/goals/" + goal.getId() + "/json-acceptance", token, null);
         assertEquals(accepted ? "completed" : "active", currentRequirements.path("data").path("status").asText());
         verify(modelFactory, atLeastOnce()).buildFor(any(), any());
