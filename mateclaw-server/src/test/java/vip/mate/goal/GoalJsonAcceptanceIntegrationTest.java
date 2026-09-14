@@ -285,6 +285,23 @@ class GoalJsonAcceptanceIntegrationTest {
                 .withAgent(goal.getAgentId());
     }
 
+    @Test void persistedQueuedAccountCanPublishButCannotBecomeARecreatedUsername() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var queue = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, new com.fasterxml.jackson.databind.ObjectMapper());
+        Long accountId = jdbc.queryForObject("SELECT id FROM mate_user WHERE username=?", Long.class, alice);
+        var input = queue.enqueue(goal.getConversationId(), 1L, alice, "publish", List.of(), accountId, java.time.LocalDateTime.now());
+        var restored = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, new com.fasterxml.jackson.databind.ObjectMapper()).get(input.id());
+        var origin = vip.mate.agent.context.ChatOrigin.web(restored.conversationId(), restored.createdBy(), 1L, null, null, restored.requesterUserId()).withAgent(restored.agentId());
+        assertEquals(1, artifacts.publishForRuntime(origin, "report", publication(0, "{\"summary\":false}")).generation());
+        jdbc.update("DELETE FROM mate_user WHERE id=?", accountId);
+        jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (?,?,?,TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", IdWorker.getId(), alice, "replacement-fixture");
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{}")));
+        var legacy = queue.enqueue(goal.getConversationId(), 1L, alice, "legacy", List.of(), java.time.LocalDateTime.now());
+        var unasserted = vip.mate.agent.context.ChatOrigin.web(legacy.conversationId(), legacy.createdBy(), 1L, null, null, legacy.requesterUserId()).withAgent(1L);
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(unasserted, "report", publication(1, "{}")));
+    }
+
     @Test void actualManagedToolUsesServerAccountContextAndExposesRequirements() throws Exception {
         GoalEntity goal = goal(false);
         acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);

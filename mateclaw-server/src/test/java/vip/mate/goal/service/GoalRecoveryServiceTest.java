@@ -36,7 +36,8 @@ class GoalRecoveryServiceTest {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V120__agent_goal.sql"),
                 new ClassPathResource("db/migration/h2/V188__goal_continuation.sql"),
                 new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql"),
-                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql")).execute(ds);
+                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql"),
+                new ClassPathResource("db/migration/h2/V199__queued_input_account_identity.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);attempts=new GoalAttemptStore(jdbc);continuations=new GoalContinuationStore(jdbc);
         inputs=new ConversationInputQueueStore(jdbc,new ObjectMapper());
         coordinator=new GoalRunCoordinator(continuations,attempts,goals,new vip.mate.goal.config.GoalProperties(),java.time.Clock.fixed(now.atZone(java.time.ZoneId.systemDefault()).toInstant(), java.time.ZoneId.systemDefault()));

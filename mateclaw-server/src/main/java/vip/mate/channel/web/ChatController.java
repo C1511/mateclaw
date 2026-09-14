@@ -1115,7 +1115,7 @@ public class ChatController {
         // Commit the payload before publishing acceptance. The stream tracker is
         // only a wake signal; the database row remains authoritative on restart.
         var stored = inputQueue.enqueue(conversationId, agentId, username, message, contentParts,
-                LocalDateTime.now());
+                requesterUserIdOf(auth), LocalDateTime.now());
         boolean queued = streamTracker.notifyQueuedInput(conversationId);
         if (!queued) {
             inputQueue.cancel(stored.id(), "stream_finished_before_queue_registration",
@@ -1526,12 +1526,15 @@ public class ChatController {
         streamTracker.incrementFlux(conversationId);
         // RFC-063r §2.5: queued messages land in the same conversation; carry
         // a web-origin ChatOrigin so any cron job created during the queued
-        // turn keeps a consistent (null-channel) binding.
+        // turn keeps a consistent (null-channel) binding. The account id comes
+        // from the authenticated enqueue, never from the previous stream
+        // username. Managed operations revalidate this account and scope.
         vip.mate.agent.context.ChatOrigin queuedOrigin =
-                vip.mate.agent.context.ChatOrigin.web(conversationId, requesterId, null, null)
-                        .withBaseUrl(baseUrl)
+                vip.mate.agent.context.ChatOrigin.web(conversationId, preConsumedInput.createdBy(),
+                                queuedConversation.getWorkspaceId(), null, baseUrl, preConsumedInput.requesterUserId())
+                        .withAgent(agentId)
                         .withOriginMessageId(queuedOriginMessageId);
-        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, requesterId, null, queuedOrigin)
+        Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, preConsumedInput.createdBy(), null, queuedOrigin)
                 .doOnNext(delta -> {
                     if (emitterDone.get()) return;
                     try {
