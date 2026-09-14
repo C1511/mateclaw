@@ -687,6 +687,34 @@ class GoalJsonAcceptanceIntegrationTest {
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,agent", "true,agent", "false,archived", "true,archived"})
+    void staleConversationRuntimeCannotUseManagedOperationsAfterScopeChanges(boolean scheduled, String change) {
+        GoalEntity goal = goal(scheduled);
+        goals.appendCriterion(goal.getId(), "report", alice);
+        var evaluation = new GoalEvaluationResult(1, "offline fixture", "completed", true, "fixture", 1, 0,
+            List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var origin = scheduled ? attemptOrigin(goal, claimed(goal)) : accountOrigin(goal, alice);
+        var version = artifacts.publishForRuntime(origin, "report", publication(0, "{\"summary\":true}"));
+        bindings.checkForRuntime(origin, "r", checkRequest(1, version));
+        if (change.equals("agent")) jdbc.update("UPDATE mate_conversation SET agent_id=99 WHERE conversation_id=?", goal.getConversationId());
+        else jdbc.update("UPDATE mate_conversation SET archived=1 WHERE conversation_id=?", goal.getConversationId());
+        assertThrows(MateClawException.class, () -> bindings.snapshotForRuntime(origin));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{\"summary\":false}")));
+        assertThrows(MateClawException.class, () -> bindings.checkForRuntime(origin, "r", checkRequest(1, version)));
+        assertThrows(MateClawException.class, () -> goals.markRuntimeCompleted(goal.getId(), null, origin));
+        assertThrows(MateClawException.class, () -> goals.markRuntimeEvaluatedCompleted(goal.getId(), evaluation, origin));
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        // User history remains readable; rejecting a stale runtime does not erase evidence.
+        assertEquals("{\"summary\":true}", artifacts.read(goal.getId(), version.artifactId(), alice).jsonContent());
+        assertTrue(acceptance.get(goal.getId(), alice).required());
+        jdbc.update("UPDATE mate_conversation SET agent_id=1,archived=0 WHERE conversation_id=?", goal.getConversationId());
+        assertTrue(bindings.snapshotForRuntime(origin).checks().getFirst().acceptanceEligible());
+        assertEquals(GoalStatus.COMPLETED, goals.markRuntimeCompleted(goal.getId(), null, origin).getStatus());
+    }
+
     @Test void userAndRuntimeSnapshotsShareCurrentRequirementsVersionsAndChecks() {
         GoalEntity goal = goal(false);
         acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);

@@ -101,6 +101,14 @@ public class ManagedGoalJsonService {
         var goal = acceptance.authorizedGoal(ids.getFirst(), users.getFirst(), true);
         if (!Objects.equals(goal.conversationId(), origin.conversationId()) || goal.workspaceId() != origin.workspaceId()
                 || goal.agentId() != origin.agentId()) throw failure(403, "Runtime goal scope mismatch");
+        // authorizedGoal already holds this conversation row. Recheck mutable
+        // runtime scope as well as the Goal's original identity on every operation.
+        var currentConversations = jdbc.queryForList("""
+                SELECT conversation_id FROM mate_conversation
+                WHERE conversation_id=? AND workspace_id=? AND agent_id=? AND deleted=0
+                AND (archived IS NULL OR archived=0) FOR UPDATE
+                """, String.class, origin.conversationId(), origin.workspaceId(), origin.agentId());
+        if (currentConversations.size() != 1) throw failure(403, "Runtime conversation scope changed or was archived");
         if (!attempt) {
             // Recheck the immutable user id after authorizedGoal acquired the user lock.
             Long userId = jdbc.queryForObject("SELECT id FROM mate_user WHERE username=? AND enabled=TRUE AND deleted=0", Long.class, users.getFirst());
