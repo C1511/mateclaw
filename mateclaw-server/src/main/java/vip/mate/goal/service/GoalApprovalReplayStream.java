@@ -34,7 +34,10 @@ public class GoalApprovalReplayStream {
                         .doOnSubscribe(subscription -> execution.source = subscription)
                         .doOnNext(execution::observe)
                         .takeUntilOther(execution.lost.asMono())
-                        .doOnComplete(execution::complete), Execution::close);
+                        .doOnComplete(execution::complete), Execution::close)
+                .retryWhen(reactor.util.retry.Retry.fixedDelay(20, java.time.Duration.ofMillis(25))
+                        .filter(GoalApprovalRunService.SettlementPending.class::isInstance)
+                        .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
     }
 
     private final class Execution implements AutoCloseable {
@@ -85,6 +88,9 @@ public class GoalApprovalReplayStream {
                 checkpoint("uncertain", "tool_completed");
             } else if ("tool_approval_requested".equals(event)) {
                 awaitingApproval=true;
+                // This exact call was deferred by the guard and has not executed.
+                Object id = data == null ? null : data.get("toolCallId");
+                if (id != null && !String.valueOf(id).isBlank()) inFlight.remove(String.valueOf(id));
             } else if ("goal_evaluated".equals(event) && data != null) {
                 evaluationUnavailable = Boolean.TRUE.equals(data.get("skipped")) || "fallback".equals(data.get("decision"));
             } else if ("finish_reason".equals(event) && data != null && data.get("reason") != null) {

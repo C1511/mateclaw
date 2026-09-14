@@ -748,6 +748,44 @@ class GoalJsonAcceptanceIntegrationTest {
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
     }
 
+    @Test void earlyApprovalWaitsForOriginalSettlementInsteadOfLosingTheConsumedCall() throws Exception {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var original = claimed(goal);
+        var origin = attemptOrigin(goal, original);
+        String pending;
+        vip.mate.agent.context.ChatOriginHolder.set(origin);
+        try {
+            pending = approvals.createPending(goal.getConversationId(), alice, "getManagedGoalJsonSlots", "{}",
+                    "offline settlement race fixture", "[]", null, "1");
+        } finally { vip.mate.agent.context.ChatOriginHolder.clear(); }
+        assertNotNull(approvals.resolveAndConsume(pending, alice).consumedSnapshot());
+        try (var pool = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var started = new java.util.concurrent.CountDownLatch(1);
+            var invocationCount = new java.util.concurrent.atomic.AtomicInteger();
+            var future = pool.submit(() -> {
+                started.countDown();
+                return approvalStream.replay(origin.withApprovalId(pending), "[]", fresh -> {
+                    invocationCount.incrementAndGet();
+                    return reactor.core.publisher.Flux.just(
+                            vip.mate.agent.AgentService.StreamDelta.event("tool_call_started", java.util.Map.of("toolCallId", "approved")),
+                            vip.mate.agent.AgentService.StreamDelta.event("tool_call_completed", java.util.Map.of("toolCallId", "approved")));
+                }).collectList().block(java.time.Duration.ofSeconds(3));
+            });
+            assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            Thread.sleep(100);
+            boolean waitedForSettlement = !future.isDone();
+            assertEquals(0, invocationCount.get(), "The approved call must not execute under the original owner");
+            assertTrue(coordinator.settle(original, new SegmentOutcome.AwaitApproval("approval_required"), java.time.LocalDateTime.now()));
+            assertEquals(2, future.get(3, java.util.concurrent.TimeUnit.SECONDS).size());
+            assertTrue(waitedForSettlement, "The consumed approval should wait briefly for its exact original attempt");
+            assertEquals(1, invocationCount.get());
+            assertEquals("queued", continuations.get(goal.getId()).state());
+            assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_attempt WHERE goal_id=?", Integer.class, goal.getId()));
+            assertFalse(coordinator.renew(original, java.time.LocalDateTime.now()));
+        }
+    }
+
     @ParameterizedTest @ValueSource(strings = {"normal", "cancel", "error", "unpaired", "renew", "lost"})
     void approvalStreamOwnsLeaseAndConservativelyRecoversInterruptedTools(String kind) throws Exception {
         GoalEntity goal = goal(true);
@@ -821,12 +859,14 @@ class GoalJsonAcceptanceIntegrationTest {
         } finally { subscription.dispose(); }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"valid", "pending", "payload", "paused", "running", "legacy", "archived", "agent", "disabled", "wrong-parent"})
+    @ParameterizedTest @ValueSource(strings = {"valid", "pending", "payload", "paused", "running", "legacy", "archived", "agent", "disabled", "wrong-parent", "cron", "stored-cron"})
     void consumedApprovalCanClaimOnlyItsExactWaitingGoalOnce(String kind) throws Exception {
         GoalEntity goal = goal(true);
         acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
         var original = claimed(goal);
-        var origin = attemptOrigin(goal, original);
+        var origin = kind.endsWith("cron") ? attemptOrigin(goal, original).withExecutionAttribution(
+                new vip.mate.agent.context.ExecutionAttribution(goal.getId(), original.attempt().id(), 1L, null, original.attempt().leaseToken()))
+                : attemptOrigin(goal, original);
         String payload = "[{\"name\":\"getManagedGoalJsonSlots\",\"arguments\":\"{}\"}]";
         String pending;
         vip.mate.agent.context.ChatOriginHolder.set(origin);
@@ -843,7 +883,7 @@ class GoalJsonAcceptanceIntegrationTest {
         if (kind.equals("archived")) jdbc.update("UPDATE mate_conversation SET archived=1 WHERE conversation_id=?", goal.getConversationId());
         if (kind.equals("agent")) jdbc.update("UPDATE mate_conversation SET agent_id=99 WHERE conversation_id=?", goal.getConversationId());
         if (kind.equals("disabled")) jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
-        var replay = origin.withApprovalId(pending);
+        var replay = kind.equals("stored-cron") ? attemptOrigin(goal, original).withApprovalId(pending) : origin.withApprovalId(pending);
         if (!kind.equals("valid")) {
             assertThrows(MateClawException.class, () -> approvalRuns.claim(replay, kind.equals("payload") ? "[]" : payload));
             assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_attempt WHERE goal_id=?", Integer.class, goal.getId()),

@@ -46,14 +46,26 @@ public class GoalApprovalRunService {
     public ReplayRun claim(ChatOrigin requested, String toolCallPayload) {
         ExecutionAttribution link = requested == null ? null : requested.executionAttribution();
         if (link == null || link.goalId() == null || link.goalAttemptId() == null
-                || link.ownerFence() == null || link.approvalId() == null) throw rejected();
+                || link.ownerFence() == null || link.approvalId() == null
+                || link.cronRunId() != null || requested.cronOrigin()) throw rejected();
         // Preserve the normal user -> conversation -> Goal lock order.
         var owners = jdbc.queryForList("SELECT username FROM mate_conversation WHERE conversation_id=? AND deleted=0",
                 String.class, requested.conversationId());
         if (owners.size()!=1) throw rejected();
         var scope = acceptance.authorizedGoal(link.goalId(), owners.getFirst(), true);
         if (!scope.required() || !"active".equals(scope.status())) throw rejected();
+        if (!Objects.equals(scope.conversationId(), requested.conversationId())
+                || !Objects.equals(scope.workspaceId(), requested.workspaceId())
+                || !Objects.equals(scope.agentId(), requested.agentId())) throw rejected();
         var candidate = continuations.getForUpdate(link.goalId());
+        if (candidate != null && "running".equals(candidate.state())
+                && Objects.equals(candidate.currentAttemptId(), link.goalAttemptId())
+                && Objects.equals(candidate.leaseOwner(), link.ownerFence())
+                && continuations.matchesFence(link.goalId(), link.ownerFence(), link.goalAttemptId(),
+                        candidate.revision(), Instant.now().getEpochSecond())
+                && attempts.hasLiveFence(link.goalAttemptId(), link.ownerFence(), Instant.now().getEpochSecond())) {
+            throw new SettlementPending();
+        }
         if (candidate == null || !"waiting_approval".equals(candidate.state())) throw rejected();
         var parent = attempts.getForUpdate(link.goalAttemptId());
         if (parent == null || !Objects.equals(parent.goalId(), link.goalId())
@@ -73,6 +85,7 @@ public class GoalApprovalRunService {
         try { persisted = json.readValue(approval.origin(), ChatOrigin.class); }
         catch (Exception error) { throw rejected(); }
         if (persisted == null || persisted.executionAttribution() == null
+                || persisted.cronOrigin() || persisted.executionAttribution().cronRunId() != null
                 || !Objects.equals(persisted.executionAttribution().goalId(), link.goalId())
                 || !Objects.equals(persisted.executionAttribution().goalAttemptId(), link.goalAttemptId())
                 || !Objects.equals(persisted.executionAttribution().ownerFence(), link.ownerFence())
@@ -101,6 +114,9 @@ public class GoalApprovalRunService {
     }
 
     private record Approval(String conversationId, String agentId, String status, String payload, String origin) { }
+    static final class SettlementPending extends MateClawException {
+        SettlementPending() { super(409, "The original Goal attempt is still settling its approval"); }
+    }
     private static MateClawException rejected() {
         return new MateClawException(409, "Approved Goal execution cannot acquire a current owner; resume from current Goal state");
     }

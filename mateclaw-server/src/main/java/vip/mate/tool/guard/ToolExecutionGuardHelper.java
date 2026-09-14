@@ -65,6 +65,7 @@ public final class ToolExecutionGuardHelper {
         // SSE 直推审批事件（增强版，包含 findings）
         if (streamTracker != null) {
             Map<String, Object> eventData = new java.util.LinkedHashMap<>();
+            eventData.put("toolCallId", toolCall.id() != null ? toolCall.id() : "");
             eventData.put("pendingId", pendingId);
             eventData.put("toolName", toolName != null ? toolName : "");
             eventData.put("arguments", arguments != null ? GraphEventPublisher.truncateForBroadcast(arguments) : "");
@@ -78,7 +79,7 @@ public final class ToolExecutionGuardHelper {
         }
 
         events.add(GraphEventPublisher.toolApprovalRequested(
-                pendingId, toolName, arguments, reason,
+                toolCall.id(), pendingId, toolName, arguments, reason,
                 evaluation.summary(),
                 evaluation.maxSeverity() != null ? evaluation.maxSeverity().name() : null,
                 evaluation.findingsToMapList()));
@@ -117,6 +118,7 @@ public final class ToolExecutionGuardHelper {
 
         if (streamTracker != null) {
             streamTracker.broadcastObject(conversationId, "tool_approval_requested", Map.of(
+                    "toolCallId", toolCall.id() != null ? toolCall.id() : "",
                     "pendingId", pendingId,
                     "toolName", toolName != null ? toolName : "",
                     "arguments", arguments != null ? GraphEventPublisher.truncateForBroadcast(arguments) : "",
@@ -125,7 +127,7 @@ public final class ToolExecutionGuardHelper {
             ));
         }
 
-        events.add(GraphEventPublisher.toolApprovalRequested(pendingId, toolName, arguments, guardResult.reason()));
+        events.add(GraphEventPublisher.toolApprovalRequested(toolCall.id(), pendingId, toolName, arguments, guardResult.reason()));
 
         return "[APPROVAL_PENDING] tool=" + toolName + " awaiting user decision";
     }
