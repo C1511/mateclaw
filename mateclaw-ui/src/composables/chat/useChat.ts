@@ -824,13 +824,18 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       currentAssistantId.value = null
     }
 
-    streamPhase.value = data.status === 'awaiting_approval' ? 'awaiting_approval'
+    streamPhase.value = errorFired ? 'idle'
+      : data.status === 'awaiting_approval' ? 'awaiting_approval'
       : data.status === 'stopped' ? 'stopped' : 'completed'
     if (data.status !== 'awaiting_approval') {
       phaseInfo.value = null
       compactStatus.value = null
       lifecycleStage.value = null
-      expirePendingApprovals(data.status === 'stopped' ? 'stopped' : 'completed')
+      // An error may be followed by a protocol-level done event. Its status
+      // does not resolve an approval or turn the failed request into success.
+      if (!errorFired) {
+        expirePendingApprovals(data.status === 'stopped' ? 'stopped' : 'completed')
+      }
     }
 
     // Safety cleanup for queue state (no-op if queued_input_started already handled it)
@@ -846,13 +851,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       : data.status === 'interrupted' ? 'interrupted'
       : data.status === 'awaiting_approval' ? 'awaiting_approval'
       : 'completed'
-    onStreamEnd?.({
-      conversationId: data.conversationId || streamConversationId,
-      reason,
-      assistantMessageId: data.assistantMessageId,
-      persisted: data.persisted,
-      messageCount: data.messageCount,
-    })
+    if (!errorFired) {
+      onStreamEnd?.({
+        conversationId: data.conversationId || streamConversationId,
+        reason,
+        assistantMessageId: data.assistantMessageId,
+        persisted: data.persisted,
+        messageCount: data.messageCount,
+      })
+    }
 
     // Re-attach SSE if any generative task is still in flight, so the eventual
     // async_task_completed event reaches us live (otherwise the user has to
@@ -861,7 +868,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     const reconnectableStatus = !data.status
       || data.status === 'completed'
       || data.status === 'idle'
-    if (reconnectableStatus
+    if (!errorFired && reconnectableStatus
         && !reconnectingForAsyncTasks
         && pendingAsyncTaskIds.size > 0
         && streamConversationId) {
@@ -918,7 +925,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     lifecycleStage.value = null
     // Clear queue on error to avoid stale state
     messageQueue.clear()
-    expirePendingApprovals('failed')
+    // The approval may still be pending after a rejected request. The view
+    // reconciles it against the server's pending list in onStreamEnd.
 
     if (errorFired) return
     errorFired = true

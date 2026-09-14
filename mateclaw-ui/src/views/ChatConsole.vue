@@ -808,6 +808,32 @@ const {
     // 流结束后刷新会话列表（更新 lastActiveTime / 标题等）
     await loadConversations()
     if (meta.conversationId && meta.conversationId === currentConversationId.value) {
+      if (meta.reason === 'error') {
+        // Keep the failed turn visible, but take approval state from the
+        // server. A rejected approval SSE error leaves its pending row open.
+        try {
+          const approvalRes: any = await chatApi.getPendingApprovals(meta.conversationId)
+          if (meta.conversationId !== currentConversationId.value) return
+          const serverIds = new Set<string>((approvalRes.data || []).map((p: any) => p.pendingId))
+          messages.value = messages.value.map((m) => {
+            const pending = (m as any).metadata?.pendingApproval
+            if (!pending?.pendingId || pending.status !== 'pending_approval') return m
+            const active = serverIds.has(pending.pendingId)
+            return {
+              ...m,
+              status: active ? 'awaiting_approval'
+                : m.status === 'awaiting_approval' ? 'failed' : m.status,
+              metadata: {
+                ...(m as any).metadata,
+                currentPhase: active ? 'awaiting_approval' : undefined,
+                pendingApproval: { ...pending, status: active ? 'pending_approval' : 'expired' },
+              },
+            }
+          })
+        } catch {
+          // Keep the local pending card if the authoritative read is unavailable.
+        }
+      }
       // Skip DB refresh for awaiting_approval / interrupted / error:
       //  - awaiting_approval / interrupted: avoids overwriting local-only state
       //    or breaking message ordering.
@@ -2065,10 +2091,6 @@ async function handleSendMessage(content: string, pendingApprovalId?: string) {
       return
     }
 
-    // 乐观更新审批状态
-    const decision = trimmed === '/approve' ? 'approved' : 'denied'
-    ;(pendingMsg as any).metadata.pendingApproval.status = decision
-
     inputText.value = ''
     chatInputRef.value?.clear?.()
 
@@ -2082,8 +2104,6 @@ async function handleSendMessage(content: string, pendingApprovalId?: string) {
       })
     } catch (e: any) {
       console.error('Approval stream failed:', e)
-      // 回滚乐观更新
-      ;(pendingMsg as any).metadata.pendingApproval.status = 'pending_approval'
       mcToast.error(e?.message || 'Approval failed')
     }
     return
