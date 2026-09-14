@@ -135,6 +135,15 @@ public class GoalContinuationStore {
                 """,state,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,revision)==1;
     }
 
+    /** Current read under the caller's goal lock, before recovery mutates its attempt. */
+    boolean hasExpiredFence(Long goalId, String token, String attemptId, long cutoffEpoch) {
+        return jdbc.queryForList("""
+                SELECT goal_id FROM mate_goal_continuation
+                WHERE goal_id=? AND lease_owner=? AND current_attempt_id=? AND state='running'
+                AND lease_until_epoch_second<=? FOR UPDATE
+                """, Long.class, goalId, token, attemptId, cutoffEpoch).size() == 1;
+    }
+
     public boolean recoverExpired(Long goalId,String token,String attemptId,long expiredEpoch,
                                   String state,LocalDateTime nextRunAt,int failures,String reason,LocalDateTime now) {
         return jdbc.update("""

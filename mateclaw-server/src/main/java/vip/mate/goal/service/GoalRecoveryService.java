@@ -68,6 +68,9 @@ public class GoalRecoveryService {
         var continuation=continuations.get(attempt.goalId());
         if(continuation==null || !attempt.id().equals(continuation.currentAttemptId())
                 || !attempt.leaseToken().equals(continuation.leaseOwner())) return false;
+        // The scan only proves the attempt expired. A live or changed projection
+        // is not recoverable yet and must not abort recovery of later goals.
+        if(!continuations.hasExpiredFence(attempt.goalId(),attempt.leaseToken(),attempt.id(),nowEpoch)) return false;
         RecoveryDecision decision=classify(attempt);
         String attemptState=decision==RecoveryDecision.BLOCK_UNCERTAIN_SIDE_EFFECT ? "blocked" : "retryable";
         String projectionState=decision==RecoveryDecision.BLOCK_UNCERTAIN_SIDE_EFFECT ? "blocked" : "retry";

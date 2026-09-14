@@ -78,6 +78,32 @@ class GoalRecoveryServiceTest {
         assertEquals(queued.id(),inputs.listQueued("conv").getFirst().id());
     }
 
+    @Test void liveProjectionDoesNotAbortRecoveryOfOtherExpiredAttempts() {
+        var live = coordinator.claim(continuations.get(1L), goal, now);
+        assertTrue(coordinator.markRunning(live, now));
+        jdbc.update("""
+            INSERT INTO mate_agent_goal(id,conversation_id,agent_id,workspace_id,created_by,title,
+                description,status,persistent_execution,auto_followup_enabled,create_time,update_time)
+            VALUES(2,'conv2',2,3,'alice','second','objective','active',TRUE,TRUE,?,?)
+            """, now, now);
+        var second = new GoalEntity();
+        org.springframework.beans.BeanUtils.copyProperties(goal, second);
+        second.setId(2L); second.setConversationId("conv2");
+        continuations.discover(now);
+        var expired = coordinator.claim(continuations.get(2L), second, now);
+        assertTrue(coordinator.markRunning(expired, now));
+        long moment = now.atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+        // The first scan candidate has a still-live projection; a later one is eligible.
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", moment - 2, live.attempt().id());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", moment - 1, expired.attempt().id());
+        jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=? WHERE goal_id=2", moment - 1);
+        assertEquals(1, recovery.recoverExpired(java.time.Instant.ofEpochSecond(moment)));
+        assertEquals("running", attempts.get(live.attempt().id()).state());
+        assertEquals(live.attempt().id(), continuations.get(1L).currentAttemptId());
+        assertEquals("retryable", attempts.get(expired.attempt().id()).state());
+        assertEquals("retry", continuations.get(2L).state());
+    }
+
     @Test void uncertainToolAttemptBlocksInsteadOfReplaying() {
         var old=coordinator.claim(continuations.get(1L),goal,now);
         assertTrue(coordinator.markRunning(old,now));

@@ -42,6 +42,8 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private vip.mate.goal.service.GoalJsonBindingService bindings;
     @Autowired private vip.mate.goal.service.GoalContinuationStore continuations;
     @Autowired private vip.mate.goal.service.GoalRunCoordinator coordinator;
+    @Autowired private vip.mate.goal.service.GoalRecoveryService recovery;
+    @Autowired private vip.mate.goal.service.GoalAttemptStore attempts;
 
     private String alice;
     private String bob;
@@ -606,6 +608,36 @@ class GoalJsonAcceptanceIntegrationTest {
         bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
         assertTrue(tool.completeGoal(context).contains("\"status\":\"completed\""));
         assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus());
+    }
+
+    @Test void uncertainRecoveryPreservesSelectedJsonAndBlocksEvenAPreviouslyPassingBinding() {
+        GoalEntity goal = goal(true);
+        goals.appendCriterion(goal.getId(), "report", alice);
+        var evaluation = new GoalEvaluationResult(1, "offline fixture", "completed", true, "fixture", 1, 0,
+            List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var version = artifacts.publishForRuntime(origin, "report", publication(0, "{\"summary\":true}"));
+        bindings.checkForRuntime(origin, "r", checkRequest(1, version));
+        assertTrue(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible());
+        assertTrue(coordinator.checkpoint(run, "uncertain", "tool_started", null, java.time.LocalDateTime.now()));
+        long expired = java.time.Instant.now().minusSeconds(1).getEpochSecond();
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", expired, run.attempt().id());
+        jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=? WHERE goal_id=?", expired, goal.getId());
+        assertTrue(recovery.recoverExpired(java.time.Instant.now()) >= 1);
+        assertEquals(GoalStatus.PAUSED, goals.getById(goal.getId()).getStatus());
+        assertTrue(goals.getById(goal.getId()).isJsonAcceptanceRequired());
+        assertEquals("blocked", attempts.get(run.attempt().id()).state());
+        assertEquals("blocked", continuations.get(goal.getId()).state());
+        assertNull(coordinator.claim(continuations.get(goal.getId()), goals.getById(goal.getId()), java.time.LocalDateTime.now()));
+        assertFalse(coordinator.renew(run, java.time.LocalDateTime.now()));
+        assertThrows(MateClawException.class, () -> goals.markRuntimeCompleted(goal.getId(), null, origin));
+        assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null));
+        assertEquals("{\"summary\":true}", artifacts.read(goal.getId(), version.artifactId(), alice).jsonContent());
+        assertTrue(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible(),
+            "Valid JSON is preserved, but cannot override an uncertain execution's paused state");
     }
 
     @Test void expiredRuntimeCannotCompleteEvenWithCurrentPassingBindings() {
