@@ -534,6 +534,32 @@ class GoalJsonAcceptanceIntegrationTest {
         assertTrue(proof.contains(report.artifactId())); assertTrue(proof.contains(sources.artifactId()));
     }
 
+    @Test void movingARequirementToAnotherSlotRetainsHistoryButRequiresTheNewCurrentBinding() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var original = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":false}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, original), alice);
+        assertTrue(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible());
+
+        acceptance.configure(goal.getId(), "r",
+                new GoalJsonAcceptanceService.ConfigureRequest(1L, "replacement", List.of("summary")), alice);
+        assertEquals("NO_ARTIFACT", bindings.state(goal.getId(), alice).getFirst().status());
+        assertEquals("{\"summary\":false}", artifacts.read(goal.getId(), original.artifactId(), alice).jsonContent());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(2, original), alice));
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice));
+        assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null));
+
+        var replacement = artifacts.publish(goal.getId(), "replacement", publication(0, "{\"summary\":0}"), alice);
+        assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null));
+        bindings.check(goal.getId(), "r", checkRequest(2, replacement), alice);
+        assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), null).getStatus());
+        assertEquals(2, bindings.snapshot(goal.getId(), alice).versionCount());
+        String proof = goals.listEvents(goal.getId(), 30).stream().filter(e -> "completed".equals(e.getEventType()))
+                .findFirst().orElseThrow().getDetailJson();
+        assertTrue(proof.contains(replacement.artifactId()));
+        assertFalse(proof.contains(original.artifactId()));
+    }
+
     @Test void completionRejectsEveryInvalidationAndFreshBindingRestoresSuccess() {
         for (String invalidation : List.of("requirement", "definition", "superseded", "expired", "corrupt")) {
             GoalEntity goal = goal(false);
