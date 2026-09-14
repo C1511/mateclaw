@@ -14,6 +14,19 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import vip.mate.MateClawApplication;
 import vip.mate.exception.MateClawException;
 import vip.mate.goal.model.GoalStatus;
+import vip.mate.goal.model.GoalCreateRequest;
+import vip.mate.goal.model.GoalEntity;
+import vip.mate.goal.model.GoalEvaluationResult;
+import vip.mate.goal.model.GoalChecklistVerdict;
+import vip.mate.goal.model.SegmentOutcome;
+import vip.mate.goal.service.GoalApprovalRunService;
+import vip.mate.goal.service.GoalAttemptStore;
+import vip.mate.goal.service.GoalContinuationStore;
+import vip.mate.goal.service.GoalRunCoordinator;
+import vip.mate.approval.ApprovalWorkflowService;
+import vip.mate.agent.context.ChatOrigin;
+import vip.mate.agent.context.ChatOriginHolder;
+import vip.mate.agent.context.ExecutionAttribution;
 import vip.mate.goal.service.GoalJsonAcceptanceService;
 import vip.mate.goal.service.GoalJsonBindingService;
 import vip.mate.goal.service.GoalService;
@@ -21,13 +34,81 @@ import vip.mate.goal.service.ManagedGoalJsonService;
 import vip.mate.memory.spi.MemoryManager;
 
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /** File-backed database, actual migrations and independently closed application contexts. */
 class GoalJsonRestartIntegrationTest {
     @TempDir Path directory;
+
+    @Test void settledManagedApprovalClaimsOneFreshAttemptAfterApplicationRestart() throws Exception {
+        String url = "jdbc:h2:file:" + directory.resolve("approval")
+                + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE";
+        String conversation = UUID.randomUUID().toString();
+        String payload = "{\"id\":\"restart-tool\",\"type\":\"function\",\"name\":\"getManagedGoalJsonSlots\",\"arguments\":\"{}\"}";
+        long goalId;
+        String parentAttempt;
+        String pendingId;
+        try (var first = start(url)) {
+            var jdbc = first.getBean(JdbcTemplate.class);
+            jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (88201,'restart-approver','unused',TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)");
+            jdbc.update("INSERT INTO mate_workspace_member(id,workspace_id,user_id,role,create_time,update_time,deleted) VALUES (88202,1,88201,'member',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)");
+            jdbc.update("INSERT INTO mate_agent(id,name,agent_type,workspace_id,enabled,create_time,update_time,deleted) VALUES (88203,'Restart approval agent','react',1,TRUE,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)");
+            jdbc.update("INSERT INTO mate_conversation(id,conversation_id,username,workspace_id,agent_id,create_time,update_time,deleted) VALUES (88204,?,'restart-approver',1,88203,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", conversation);
+            var request = new GoalCreateRequest();
+            request.setTitle("Restart approval"); request.setDescription("Checked report");
+            request.setConversationId(conversation); request.setWorkspaceId(1L); request.setAgentId(88203L);
+            request.setPersistentExecution(true); request.setAutoFollowupEnabled(false);
+            var goals = first.getBean(GoalService.class);
+            GoalEntity goal = goals.create(request, "restart-approver");
+            goalId = goal.getId();
+            goals.appendCriterion(goalId, "Produce report", "restart-approver");
+            goals.recordEvaluation(goalId, new GoalEvaluationResult(1, "offline restart fixture", "completed", true,
+                    "fixture", 1, 0, List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null), 1, 1);
+            first.getBean(GoalJsonAcceptanceService.class).configure(goalId, "r",
+                    new GoalJsonAcceptanceService.ConfigureRequest(0L, "report", List.of("summary")), "restart-approver");
+            var artifact = first.getBean(ManagedGoalJsonService.class).publish(goalId, "report",
+                    new ManagedGoalJsonService.PublishRequest(0L, "{\"summary\":false}"), "restart-approver");
+            assertTrue(first.getBean(GoalJsonBindingService.class).check(goalId, "r",
+                    new GoalJsonBindingService.CheckRequest(1L, artifact.artifactId(), 1L), "restart-approver").acceptanceEligible());
+            jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=TRUE WHERE id=?", goalId);
+            var continuations = first.getBean(GoalContinuationStore.class);
+            continuations.discover(LocalDateTime.now());
+            var coordinator = first.getBean(GoalRunCoordinator.class);
+            var parent = coordinator.claim(continuations.get(goalId), goals.getById(goalId), LocalDateTime.now());
+            assertNotNull(parent);
+            assertTrue(coordinator.markRunning(parent, LocalDateTime.now()));
+            parentAttempt = parent.attempt().id();
+            ChatOrigin origin = ChatOrigin.web(conversation, "restart-approver", 1L, null)
+                    .withAgent(88203L).withExecutionAttribution(new ExecutionAttribution(
+                            goalId, parentAttempt, null, null, parent.attempt().leaseToken()));
+            ChatOriginHolder.set(origin);
+            try {
+                pendingId = first.getBean(ApprovalWorkflowService.class).createPending(conversation,
+                        "restart-approver", "getManagedGoalJsonSlots", "{}", "restart fixture", payload, "[]", "88203");
+            } finally { ChatOriginHolder.clear(); }
+            assertTrue(coordinator.settle(parent, new SegmentOutcome.AwaitApproval("approval_required"), LocalDateTime.now()));
+            assertEquals("waiting_approval", continuations.get(goalId).state());
+        }
+        try (var second = start(url)) {
+            var approvals = second.getBean(ApprovalWorkflowService.class);
+            var pending = approvals.findPendingByConversation(conversation);
+            assertNotNull(pending);
+            assertEquals(pendingId, pending.getPendingId());
+            var restored = approvals.restoreChatOrigin(pending.getChatOrigin()).withApprovalId(pendingId);
+            assertNotNull(approvals.resolveAndConsume(pendingId, "restart-approver").consumedSnapshot());
+            var fresh = second.getBean(GoalApprovalRunService.class).claim(restored, payload);
+            assertEquals(parentAttempt, fresh.run().attempt().parentAttemptId());
+            assertNotEquals(parentAttempt, fresh.run().attempt().id());
+            assertEquals(pendingId, second.getBean(JdbcTemplate.class).queryForObject(
+                    "SELECT approval_pending_id FROM mate_goal_attempt WHERE attempt_id=?", String.class, fresh.run().attempt().id()));
+            assertEquals(2, second.getBean(GoalAttemptStore.class).listRecent(goalId, 10).size());
+            assertTrue(second.getBean(GoalJsonBindingService.class).state(goalId, "restart-approver").getFirst().acceptanceEligible());
+        }
+    }
 
     @Test void legacyUpgradeAndManagedBindingsSurviveApplicationRestart() {
         String url = "jdbc:h2:file:" + directory.resolve("goals")
