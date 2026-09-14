@@ -19,7 +19,8 @@ class GoalJsonExternalApprovalIntegrationTest extends GoalJsonHttpRuntimeIntegra
             "false,legacy-terminal-approval,true", "true,legacy-terminal-approval,true",
             "false,originless-terminal-approval,true", "true,originless-terminal-approval,true",
             "false,late-terminal-approval,true", "true,late-terminal-approval,true",
-            "false,queued-terminal-approval,true", "true,queued-terminal-approval,true"})
+            "false,queued-terminal-approval,true", "true,queued-terminal-approval,true",
+            "false,queued-revoked-approval,true", "true,queued-revoked-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(
             boolean plan, String entry, boolean accepted) throws Exception {
         super.authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(plan, entry, accepted);
