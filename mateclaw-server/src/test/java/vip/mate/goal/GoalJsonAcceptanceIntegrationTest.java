@@ -601,4 +601,23 @@ class GoalJsonAcceptanceIntegrationTest {
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
     }
 
+    @Test void userAndRuntimeSnapshotsShareCurrentRequirementsVersionsAndChecks() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var first = bindings.snapshot(goal.getId(), alice);
+        assertTrue(first.required()); assertEquals("active", first.status()); assertEquals(0, first.versionCount());
+        assertEquals("NO_ARTIFACT", first.checks().getFirst().status());
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":false}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        var user = bindings.snapshot(goal.getId(), alice);
+        var runtime = bindings.snapshotForRuntime(accountOrigin(goal, alice));
+        assertEquals(user, runtime); assertEquals(1, user.versionCount());
+        assertEquals(user.requirements().getFirst().revision(), user.checks().getFirst().requirementRevision());
+        assertEquals(user.slots().getFirst().current().artifactId(), user.checks().getFirst().artifactId());
+        assertTrue(user.checks().getFirst().acceptanceEligible());
+        assertThrows(MateClawException.class, () -> bindings.snapshot(goal.getId(), bob));
+        goals.markRuntimeCompleted(goal.getId(), null, accountOrigin(goal, alice));
+        assertEquals("completed", bindings.snapshot(goal.getId(), alice).status());
+    }
+
 }

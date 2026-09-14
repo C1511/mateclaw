@@ -30,6 +30,25 @@ public class GoalJsonBindingService {
                         Instant checkedAt, Instant expiresAt, boolean acceptanceEligible) { }
     public record State(String criterionKey, long requirementRevision, String artifactId, Long generation,
                         String status, boolean acceptanceEligible) { }
+    public record Snapshot(boolean required, String status, int versionCount,
+                           List<GoalJsonAcceptanceService.Requirement> requirements,
+                           List<ManagedGoalJsonService.Slot> slots, List<State> checks) { }
+
+    @Transactional
+    public Snapshot snapshot(Long goalId, String username) {
+        return snapshotLocked(acceptance.authorizedGoal(goalId, username, true));
+    }
+
+    @Transactional
+    public Snapshot snapshotForRuntime(ChatOrigin origin) {
+        return snapshotLocked(artifacts.runtimeGoal(origin).goal());
+    }
+
+    private Snapshot snapshotLocked(GoalJsonAcceptanceService.GoalScope goal) {
+        int count = jdbc.queryForList("SELECT artifact_id FROM mate_goal_json_artifact WHERE goal_id=? FOR UPDATE", String.class, goal.id()).size();
+        return new Snapshot(goal.required(), goal.status(), count, acceptance.requirements(goal.id()), artifacts.slots(goal.id()), statesLocked(goal.id()));
+    }
+
     record Stored(String artifactId, long generation, String body, String sha256, int byteLength, Instant expiresAt) { }
     record Binding(long requirementRevision, long evaluationRevision, String artifactId, long generation,
                    String sha256, String recipeId, int recipeRevision, String status, Instant expiresAt) { }

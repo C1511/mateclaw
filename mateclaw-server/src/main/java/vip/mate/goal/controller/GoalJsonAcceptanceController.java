@@ -43,6 +43,11 @@ public class GoalJsonAcceptanceController {
         return R.ok(artifacts.read(goalId, artifactId, username(auth)));
     }
 
+    @GetMapping("/snapshot")
+    public R<vip.mate.goal.service.GoalJsonBindingService.Snapshot> snapshot(@PathVariable Long goalId, Authentication auth) {
+        return R.ok(bindings.snapshot(goalId, username(auth)));
+    }
+
     @GetMapping("/checks")
     public R<java.util.List<vip.mate.goal.service.GoalJsonBindingService.State>> checks(@PathVariable Long goalId, Authentication auth) {
         return R.ok(bindings.state(goalId, username(auth)));

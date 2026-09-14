@@ -55,14 +55,6 @@ public class ManagedGoalJsonService {
         return rows.getFirst();
     }
 
-    public record RuntimeView(List<GoalJsonAcceptanceService.Requirement> requirements, List<Slot> slots) { }
-
-    @Transactional
-    public RuntimeView listForRuntime(ChatOrigin origin) {
-        long goalId = runtimeGoal(origin).goal().id();
-        return new RuntimeView(acceptance.requirements(goalId), slots(goalId));
-    }
-
     @Transactional
     public Artifact publishForRuntime(ChatOrigin origin, String slot, PublishRequest request) {
         var runtime = runtimeGoal(origin);

@@ -21,7 +21,7 @@ public class ManagedGoalJsonTool {
     @Tool(description = "Read the current conversation goal's managed JSON artifact slots and generations. "
             + "Only user-selected slots appear. Preserve generation strings exactly. This does not check or complete the goal.")
     public String getManagedGoalJsonSlots(ToolContext context) throws JsonProcessingException {
-        return json.writeValueAsString(artifacts.listForRuntime(ChatOrigin.from(context)));
+        return json.writeValueAsString(bindings.snapshotForRuntime(ChatOrigin.from(context)));
     }
 
     @Tool(description = "Publish a new immutable JSON object version to a user-selected slot of the current goal. "

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ManagedGoalJsonVersions from './ManagedGoalJsonVersions.vue'
 import { goalJsonAcceptanceApi, type GoalJsonAcceptanceView, type GoalJsonRequirement } from '@/api/goalJsonAcceptance'
 
 const props = defineProps<{ goalId: string; status: string }>()
@@ -112,6 +113,7 @@ onBeforeUnmount(() => { generation++ })
             <button v-if="editable" type="button" :disabled="busy" data-json-requirement-edit @click="edit(requirement)">{{ t('goalJsonAcceptance.edit') }}</button>
           </li>
         </ul>
+        <ManagedGoalJsonVersions v-if="view.required" :goal-id="goalId" :status="status" :requirements="view.requirements" @access-lost="showFailure({ code: 403 })" />
         <form v-if="editable" @submit.prevent="save">
           <p>{{ t('goalJsonAcceptance.selectionNotice') }}</p>
           <label>{{ t('goalJsonAcceptance.key') }}<input v-model="key" data-json-requirement-key required maxlength="64" :disabled="busy || revision !== '0'" placeholder="report-fields" /></label>
