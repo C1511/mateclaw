@@ -274,6 +274,36 @@ class GoalJsonHttpRuntimeIntegrationTest {
         verify(modelFactory, atLeastOnce()).buildFor(any(), any());
     }
 
+    @org.junit.jupiter.api.Test
+    void oldJwtCannotConfigureManagedRequirementsAfterUsernameIsReassigned() throws Exception {
+        String username = "reassigned-json-" + UUID.randomUUID();
+        String conversation = UUID.randomUUID().toString();
+        String password = "OfflineFixtureOnly-20260914";
+        String hash = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder().encode(password);
+        long oldId = IdWorker.getId(), newId = IdWorker.getId();
+        jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (?,?,?,TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", oldId, username, hash);
+        jdbc.update("INSERT INTO mate_conversation(id,conversation_id,username,workspace_id,agent_id,create_time,update_time,deleted) VALUES (?,?,?,1,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", IdWorker.getId(), conversation, username);
+        var create = new GoalCreateRequest(); create.setConversationId(conversation); create.setAgentId(1L); create.setWorkspaceId(1L);
+        create.setTitle("Reassigned account JSON fixture"); create.setDescription("Produce JSON"); create.setPersistentExecution(false); create.setAutoFollowupEnabled(false);
+        GoalEntity goal = goals.create(create, username);
+        String token = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password)).path("data").path("token").asText();
+        assertFalse(token.isBlank());
+        String path = "/api/v1/goals/" + goal.getId() + "/json-acceptance/requirements/r";
+        assertEquals(200, request("PUT", path, token, Map.of("expectedRevision", "0", "artifactSlot", "report", "requiredFields", List.of("summary"))).path("code").asInt());
+        // Simulate account retirement and a new account receiving the same username.
+        jdbc.update("UPDATE mate_user SET username=?,deleted=1,enabled=FALSE WHERE id=?", "retired-" + oldId, oldId);
+        jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (?,?,?,TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", newId, username, hash);
+        var stale = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                .timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json").header("Authorization", "Bearer " + token)
+                .PUT(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("expectedRevision", "1", "artifactSlot", "report", "requiredFields", List.of("changed"))))).build();
+        var rejected = HttpClient.newHttpClient().send(stale, HttpResponse.BodyHandlers.ofString());
+        assertTrue(rejected.statusCode() == 401 || rejected.statusCode() == 403, rejected.statusCode() + ": " + rejected.body());
+        assertEquals(1L, jdbc.queryForObject("SELECT revision FROM mate_goal_json_requirement WHERE goal_id=? AND criterion_key='r'", Long.class, goal.getId()));
+        String fresh = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password)).path("data").path("token").asText();
+        assertFalse(fresh.isBlank());
+        assertEquals(200, request("GET", "/api/v1/goals/" + goal.getId() + "/json-acceptance", fresh, null).path("code").asInt());
+    }
+
     private GoalRunCoordinator.ClaimedRun claim(GoalEntity goal) {
         var run = coordinator.claim(continuations.get(goal.getId()), goals.getById(goal.getId()), java.time.LocalDateTime.now());
         assertNotNull(run);

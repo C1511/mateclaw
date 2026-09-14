@@ -62,3 +62,5 @@ Recovery attempts receive guidance to inspect existing evidence before repeating
 From V199, queued Web input stores the authenticated account ID at enqueue time, and ordinary Web replay carries the conversation workspace. Managed operations still recheck the account, ownership and current requirements. Legacy queue items do not gain an asserted identity from a username; users must resend an authenticated request for managed JSON operations. Persistent Goal workers retain their existing attempt-owner validation when consuming input; this does not introduce an account path without a lease check.
 
 Approval replay restores the persisted runtime identity; approval does not renew an expired attempt lease or override account revocation. Legacy snapshots without an authenticated account ID cannot gain managed JSON access from a display username alone.
+
+JWT requests match the signed userId to the current enabled account ID. Recreating an account with the same username does not let the old token modify managed requirements or acquire the new runtime identity. A missing or malformed ID requires a fresh login. Sliding renewal retains the validated account identity.
