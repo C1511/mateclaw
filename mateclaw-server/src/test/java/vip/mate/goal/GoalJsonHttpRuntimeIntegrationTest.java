@@ -67,10 +67,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
         "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
-        "false,queued,true", "false,reuse,true", "true,reuse,true"})
+        "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
         boolean reuse = entry.equals("reuse");
+        boolean recheck = entry.equals("recheck");
         boolean queued = entry.equals("queued");
         boolean recovered = entry.equals("recovered");
         String username = "http-json-" + UUID.randomUUID();
@@ -138,6 +139,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
         ChatModel model = mock(ChatModel.class);
         AtomicInteger calls = new AtomicInteger();
         java.util.concurrent.atomic.AtomicReference<String> revision = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> originalCheck = new java.util.concurrent.atomic.AtomicReference<>();
         org.mockito.stubbing.Answer<ChatResponse> script = invocation -> {
             Prompt prompt = invocation.getArgument(0);
             int step = calls.getAndIncrement();
@@ -161,6 +163,23 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     .flatMap(m -> m.getResponses().stream()).toList();
             JsonNode last = responses.isEmpty() ? null : json.readTree(responses.getLast().responseData());
             String name; String arguments = "{}";
+            if (recheck && step >= 5 && step <= 7) {
+                if (step == 5) {
+                    assertTrue(last.path("error").asBoolean(), String.valueOf(last));
+                    name = "getManagedGoalJsonSlots";
+                } else if (step == 6) {
+                    assertEquals("GOAL_CHANGED", last.path("checks").get(0).path("status").asText(), String.valueOf(last));
+                    assertEquals(1, last.path("versionCount").asInt());
+                    name = "checkManagedGoalJson";
+                    arguments = originalCheck.get();
+                    assertNotNull(arguments);
+                } else {
+                    assertTrue(last.path("acceptanceEligible").asBoolean(), String.valueOf(last));
+                    name = "completeGoal";
+                }
+                return new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("")
+                        .toolCalls(List.of(new AssistantMessage.ToolCall("recheck-" + step, "function", name, arguments))).build())));
+            }
             switch (step) {
                 case 0 -> name = "completeGoal";
                 case 1 -> { assertTrue(last.path("error").asBoolean(), String.valueOf(last)); name = "getManagedGoalJsonSlots"; }
@@ -187,10 +206,16 @@ class GoalJsonHttpRuntimeIntegrationTest {
                         name = "checkManagedGoalJson";
                         arguments = json.writeValueAsString(Map.of("criterionKey", "r", "expectedRequirementRevision", revision.get(),
                                 "artifactId", last.path("artifactId").asText(), "expectedGeneration", last.path("generation").asText()));
+                        originalCheck.set(arguments);
                     }
                 }
                 case 4 -> {
                     assertTrue((reuse ? last.path("checks").get(0) : last).path("acceptanceEligible").asBoolean(), String.valueOf(last));
+                    if (recheck) {
+                        // Simulate a user definition edit between the first check and completion.
+                        var edit = new GoalUpdateRequest(); edit.setDescription("Revised report context");
+                        goals.update(goal.getId(), edit, username);
+                    }
                     name = "completeGoal";
                 }
                 default -> {
@@ -264,9 +289,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
         }
         assertEquals(accepted ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
         assertEquals(accepted, bindings.state(goal.getId(), username).getFirst().acceptanceEligible());
-        assertTrue(calls.get() >= (accepted ? 6 : 2) && calls.get() <= (accepted ? 10 : 4), "Bounded offline model calls: " + calls.get());
+        assertTrue(calls.get() >= (accepted ? 6 : 2) && calls.get() <= (recheck ? 12 : accepted ? 10 : 4), "Bounded offline model calls: " + calls.get());
         if (!accepted) assertEquals(recovered ? 1 : 0,
             jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+        if (recheck) assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()),
+            "A changed goal definition requires a fresh binding, not another publication of unchanged bytes");
         if (reuse) assertEquals(32, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()),
             "Checking and completing a current version must not consume another publication");
         JsonNode currentRequirements = request("GET", "/api/v1/goals/" + goal.getId() + "/json-acceptance", token, null);

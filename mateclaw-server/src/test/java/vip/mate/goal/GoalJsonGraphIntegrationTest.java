@@ -149,6 +149,8 @@ class GoalJsonGraphIntegrationTest {
         }
         assertFalse(progress.load(conversation).asMap().containsKey("auto_getManagedGoalJsonSlots"),
                 "Current acceptance reads must not become a permanent done step that discourages reloading");
+        assertFalse(progress.load(conversation).asMap().containsKey("auto_checkManagedGoalJson"),
+                "A time-bound JSON binding must not become a done step that discourages rechecking in this tool loop");
         assertTrue(calls.get() >= (automatic ? 5 : 6) && calls.get() <= 10, "Bounded scripted model calls: " + calls.get());
     }
     @org.junit.jupiter.params.ParameterizedTest
