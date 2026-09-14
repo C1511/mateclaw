@@ -400,6 +400,12 @@ public class GoalServiceImpl implements GoalService {
                 }
                 return null; // idempotent
             }
+            if (fresh.isJsonAcceptanceRequired()) {
+                // User-selected requirements never fall back to model text or
+                // the legacy explicit-completion path while bindings are absent.
+                throw new MateClawException("err.goal.json_acceptance_required", 409,
+                        "Managed JSON acceptance requires verified current artifact bindings");
+            }
             if (evaluated && result.evaluationRevision() != fresh.getEvaluationRevision()) {
                 throw new MateClawException("err.goal.completion_not_verified", 409,
                         "Automatic completion requires the current evaluation definition revision");
@@ -737,6 +743,7 @@ public class GoalServiceImpl implements GoalService {
         r.setExitCriteria(e.getExitCriteria());
         r.setSuccessCheckPrompt(e.getSuccessCheckPrompt());
         r.setStatus(e.getStatus());
+        r.setJsonAcceptanceRequired(e.isJsonAcceptanceRequired());
         r.setPersistentExecution(Boolean.TRUE.equals(e.getPersistentExecution()));
         r.setTurnBudget(e.getTurnBudget());
         r.setTurnsUsed(e.getTurnsUsed());

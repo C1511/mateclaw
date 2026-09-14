@@ -56,6 +56,9 @@ public class GoalEntity {
     /** Advances on evaluation-definition edits, independently of optimistic-lock/usage version. */
     private long evaluationRevision;
 
+    /** User-selected managed JSON acceptance; never falls back to semantic completion. */
+    private boolean jsonAcceptanceRequired;
+
     /** LLM-readable exit criteria; evaluator scores against this. Nullable. */
     @TableField(value = "exit_criteria", updateStrategy = FieldStrategy.ALWAYS)
     private String exitCriteria;
