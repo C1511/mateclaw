@@ -49,7 +49,7 @@ public class ManagedGoalJsonService {
     @Transactional
     public Content read(Long goalId, String artifactId, String username) {
         acceptance.authorizedGoal(goalId, username, true);
-        var rows = jdbc.query("SELECT * FROM mate_goal_json_artifact WHERE goal_id=? AND artifact_id=?",
+        var rows = jdbc.query("SELECT * FROM mate_goal_json_artifact WHERE goal_id=? AND artifact_id=? FOR UPDATE",
                 (r, i) -> new Content(artifact(r), r.getString("json_body")), goalId, artifactId);
         if (rows.size() != 1) throw failure(404, "Managed JSON version not found");
         return rows.getFirst();
@@ -67,10 +67,14 @@ public class ManagedGoalJsonService {
     public Artifact publishForRuntime(ChatOrigin origin, String slot, PublishRequest request) {
         var runtime = runtimeGoal(origin);
         var result = publishLocked(runtime.goal(), slot, request, runtime.producerKind(), runtime.producerId());
-        if (runtime.leaseUntil() != null && !runtime.leaseUntil().isAfter(LocalDateTime.now())) {
-            throw failure(409, "Goal attempt lease expired during publication");
-        }
+        verifyLease(runtime);
         return result;
+    }
+
+    static void verifyLease(RuntimeScope runtime) {
+        if (runtime.leaseUntil() != null && !runtime.leaseUntil().isAfter(LocalDateTime.now())) {
+            throw failure(409, "Goal attempt lease expired during managed JSON operation");
+        }
     }
 
     record RuntimeScope(GoalJsonAcceptanceService.GoalScope goal, String producerKind,
@@ -151,11 +155,11 @@ public class ManagedGoalJsonService {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         if (!content.equals(new String(bytes, StandardCharsets.UTF_8))) throw failure(400, "JSON must be valid UTF-8");
         JsonArtifactRecipe.parseObject(bytes);
-        var generations = jdbc.queryForList("SELECT generation FROM mate_goal_json_slot WHERE goal_id=? AND artifact_slot=?", Long.class, goal.id(), slot);
+        var generations = jdbc.queryForList("SELECT generation FROM mate_goal_json_slot WHERE goal_id=? AND artifact_slot=? FOR UPDATE", Long.class, goal.id(), slot);
         long generation = generations.isEmpty() ? 0 : generations.getFirst();
         if (request.expectedGeneration() != generation) throw failure(409, "JSON slot generation changed; reload before publishing");
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.id());
-        if (count == null || count >= 32) throw failure(409, "Managed JSON limit reached (32 versions per goal)");
+        int count = jdbc.queryForList("SELECT artifact_id FROM mate_goal_json_artifact WHERE goal_id=? FOR UPDATE", String.class, goal.id()).size();
+        if (count >= 32) throw failure(409, "Managed JSON limit reached (32 versions per goal)");
         long next = Math.addExact(generation, 1);
         // Whole seconds also round-trip through MySQL TIMESTAMP without fractional precision.
         Instant created = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
@@ -181,7 +185,7 @@ public class ManagedGoalJsonService {
                     var rows = jdbc.query("""
                             SELECT a.* FROM mate_goal_json_slot s JOIN mate_goal_json_artifact a
                             ON a.artifact_id=s.artifact_id AND a.goal_id=s.goal_id AND a.artifact_slot=s.artifact_slot AND a.generation=s.generation
-                            WHERE s.goal_id=? AND s.artifact_slot=?
+                            WHERE s.goal_id=? AND s.artifact_slot=? FOR UPDATE
                             """, (r, i) -> artifact(r), goalId, slot);
                     if (rows.isEmpty()) return new Slot(slot, 0, null);
                     var current = rows.getFirst();

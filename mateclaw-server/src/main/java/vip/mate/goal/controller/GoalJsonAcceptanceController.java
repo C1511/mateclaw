@@ -14,6 +14,7 @@ import vip.mate.goal.service.ManagedGoalJsonService;
 public class GoalJsonAcceptanceController {
     private final GoalJsonAcceptanceService acceptance;
     private final ManagedGoalJsonService artifacts;
+    private final vip.mate.goal.service.GoalJsonBindingService bindings;
 
     @GetMapping
     public R<GoalJsonAcceptanceService.View> get(@PathVariable Long goalId, Authentication auth) {
@@ -40,6 +41,17 @@ public class GoalJsonAcceptanceController {
     @GetMapping("/artifacts/versions/{artifactId}")
     public R<ManagedGoalJsonService.Content> version(@PathVariable Long goalId, @PathVariable String artifactId, Authentication auth) {
         return R.ok(artifacts.read(goalId, artifactId, username(auth)));
+    }
+
+    @GetMapping("/checks")
+    public R<java.util.List<vip.mate.goal.service.GoalJsonBindingService.State>> checks(@PathVariable Long goalId, Authentication auth) {
+        return R.ok(bindings.state(goalId, username(auth)));
+    }
+
+    @PostMapping("/checks/{criterionKey}")
+    public R<vip.mate.goal.service.GoalJsonBindingService.Check> check(@PathVariable Long goalId, @PathVariable String criterionKey,
+            @RequestBody vip.mate.goal.service.GoalJsonBindingService.CheckRequest request, Authentication auth) {
+        return R.ok(bindings.check(goalId, criterionKey, request, username(auth)));
     }
 
     private static String username(Authentication auth) {

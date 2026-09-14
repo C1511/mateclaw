@@ -99,7 +99,7 @@ public class GoalJsonAcceptanceService {
     }
 
     List<Requirement> requirements(Long goalId) {
-        return jdbc.query("SELECT criterion_key,artifact_slot,revision,required_fields,updated_by FROM mate_goal_json_requirement WHERE goal_id=? ORDER BY criterion_key",
+        return jdbc.query("SELECT criterion_key,artifact_slot,revision,required_fields,updated_by FROM mate_goal_json_requirement WHERE goal_id=? ORDER BY criterion_key FOR UPDATE",
                 (row, i) -> new Requirement(row.getString("criterion_key"), row.getString("artifact_slot"), row.getLong("revision"), decode(row.getString("required_fields")), row.getString("updated_by")), goalId);
     }
 

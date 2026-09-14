@@ -2,7 +2,7 @@
 
 Expand JSON acceptance requirements in the Goal panel. The conversation owner or an administrator explicitly saves up to eight requirements, each mapping an artifact slot to 1–16 top-level fields. Fields must exist and be non-null; false, zero and empty strings are allowed. This is a presence check, not a quality judgment. Opt-in is durable: requirements can be revised using their current revision, but required mode cannot be disabled. Stale revisions produce a conflict.
 
-The current stage provides user configuration and independent managed version storage. Binding verification and the successful strong-completion path are still pending. Selected goals temporarily reject completion without falling back to textual claims. Unselected goals retain existing behavior.
+The current stage provides user configuration and independent managed version storage. Binding verification is available; the successful strong-completion path is still pending. Selected goals temporarily reject completion without falling back to textual claims. Unselected goals retain existing behavior.
 
 ## Managed version API
 
@@ -23,3 +23,10 @@ Managed bodies live independently in the database. Ordinary workspace files, cac
 `getManagedGoalJsonSlots` returns current user requirements, slots and generations. `publishManagedGoalJson` accepts `artifactSlot`, a string `expectedGeneration` and `jsonContent`. Tools cannot configure requirements or supply goal IDs, accounts or owner fences. Interactive sessions require the authenticated account's internal ID. Scheduled persistent-goal execution must match the current continuation, attempt, owner token and live leases. Both paths recheck the conversation, workspace, agent and enabled account. The default delegation deny list includes both tools; the service still independently validates identity.
 
 Publication and scheduler settlement serialize through the goal lock, rejecting late writes by former owners. Ending a lease does not mutate previously published versions. Anonymous sessions and cron runs without a bound goal attempt are outside this publication protocol. Missing identity is rejected instead of trusting a display username.
+
+
+## Binding checks
+
+After publication, call `POST /checks/{criterionKey}` with `expectedRequirementRevision`, `artifactId` and `expectedGeneration`, or use the agent tool `checkManagedGoalJson` with the same fields. Tool revisions and generations are strings. The server checks the specified current slot version using its own fields recipe; it never accepts a caller-provided PASS. `acceptanceEligible=true` applies to that requirement at the time of checking, not to whole-goal completion.
+
+`GET /checks` reads each requirement's current eligibility. Requirement edits, goal-definition edits, a new slot version, expiry or failed body integrity checks invalidate previous bindings. Recheck the current inputs. Binding and goal-version updates share a transaction; rollback cannot leave a passing credential. Historical diagnostic APIs retain `acceptanceEligible=false`; only managed checks create bindings. Integration with the shared completion entry point is still pending.

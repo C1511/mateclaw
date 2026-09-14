@@ -16,6 +16,7 @@ import vip.mate.goal.service.ManagedGoalJsonService;
 public class ManagedGoalJsonTool {
     private final ManagedGoalJsonService artifacts;
     private final ObjectMapper json;
+    private final vip.mate.goal.service.GoalJsonBindingService bindings;
 
     @Tool(description = "Read the current conversation goal's managed JSON artifact slots and generations. "
             + "Only user-selected slots appear. Preserve generation strings exactly. This does not check or complete the goal.")
@@ -38,4 +39,21 @@ public class ManagedGoalJsonTool {
         return json.writeValueAsString(artifacts.publishForRuntime(ChatOrigin.from(context), artifactSlot,
                 new ManagedGoalJsonService.PublishRequest(generation, jsonContent)));
     }
+    @Tool(description = "Run the trusted JSON fields recipe against an exact current managed version for one user requirement. "
+            + "Use the requirement revision from getManagedGoalJsonSlots and artifact ID/generation from publication. "
+            + "The server derives the result from stored bytes; it does not accept a caller PASS. "
+            + "Every current user requirement needs a matching binding before goal completion; edits or new versions invalidate old bindings.")
+    public String checkManagedGoalJson(
+            @ToolParam(description = "Current user requirement key") String criterionKey,
+            @ToolParam(description = "Exact current requirement revision string") String expectedRequirementRevision,
+            @ToolParam(description = "Exact current managed artifact ID") String artifactId,
+            @ToolParam(description = "Exact current slot generation string") String expectedGeneration,
+            ToolContext context) throws JsonProcessingException {
+        Long revision; Long generation;
+        try { revision = Long.valueOf(expectedRequirementRevision); generation = Long.valueOf(expectedGeneration); }
+        catch (RuntimeException invalid) { throw new vip.mate.exception.MateClawException(400, "Valid expected revisions are required"); }
+        return json.writeValueAsString(bindings.checkForRuntime(ChatOrigin.from(context), criterionKey,
+                new vip.mate.goal.service.GoalJsonBindingService.CheckRequest(revision, artifactId, generation)));
+    }
+
 }

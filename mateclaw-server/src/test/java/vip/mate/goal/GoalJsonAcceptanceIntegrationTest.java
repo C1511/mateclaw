@@ -39,6 +39,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private vip.mate.tool.builtin.ManagedGoalJsonTool managedTool;
+    @Autowired private vip.mate.goal.service.GoalJsonBindingService bindings;
     @Autowired private vip.mate.goal.service.GoalContinuationStore continuations;
     @Autowired private vip.mate.goal.service.GoalRunCoordinator coordinator;
 
@@ -266,7 +267,7 @@ class GoalJsonAcceptanceIntegrationTest {
         acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
         var origin = accountOrigin(goal, alice);
         var callbacks = org.springframework.ai.support.ToolCallbacks.from(managedTool);
-        assertEquals(2, callbacks.length);
+        assertEquals(3, callbacks.length);
         for (var callback : callbacks) {
             String schema = callback.getToolDefinition().inputSchema();
             assertFalse(schema.contains("\"goalId\""));
@@ -354,6 +355,91 @@ class GoalJsonAcceptanceIntegrationTest {
             assertEquals(published ? 1 : 0, artifacts.list(goal.getId(), alice).getFirst().generation());
             assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(published ? 1 : 0, "{}")));
         }
+    }
+
+    private vip.mate.goal.service.GoalJsonBindingService.CheckRequest checkRequest(long revision, vip.mate.goal.service.ManagedGoalJsonService.Artifact version) {
+        return new vip.mate.goal.service.GoalJsonBindingService.CheckRequest(revision, version.artifactId(), version.generation());
+    }
+
+    @Test void trustedRecipeBindsExactCurrentVersionAndRejectsTextualSubstitutes() throws Exception {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        assertEquals("NO_ARTIFACT", bindings.state(goal.getId(), alice).getFirst().status());
+        var bad = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":null,\"claim\":\"PASS\"}"), alice);
+        var rejected = bindings.check(goal.getId(), "r", checkRequest(1, bad), alice);
+        assertFalse(rejected.acceptanceEligible());
+        assertEquals(List.of("summary"), rejected.missingFields());
+        var good = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":false}"), alice);
+        assertEquals("SUPERSEDED", bindings.state(goal.getId(), alice).getFirst().status());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, bad), alice));
+        var result = managedTool.checkManagedGoalJson("r", "1", good.artifactId(), "2", accountOrigin(goal, alice).toToolContext());
+        assertTrue(result.contains("\"acceptanceEligible\":true"));
+        assertTrue(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible());
+        assertEquals(good.artifactId(), bindings.state(goal.getId(), alice).getFirst().artifactId());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, good), bob));
+    }
+
+    @Test void editedRequirementsAndGoalDefinitionInvalidatePreviouslyMatchingBindings() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true,\"sources\":[]}"), alice);
+        assertTrue(bindings.check(goal.getId(), "r", checkRequest(1, version), alice).acceptanceEligible());
+        acceptance.configure(goal.getId(), "r", request(1, "summary", "sources"), alice);
+        assertEquals("REQUIREMENT_CHANGED", bindings.state(goal.getId(), alice).getFirst().status());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, version), alice));
+        assertTrue(bindings.check(goal.getId(), "r", checkRequest(2, version), alice).acceptanceEligible());
+        GoalUpdateRequest edit = new GoalUpdateRequest(); edit.setDescription("A revised report definition");
+        goals.update(goal.getId(), edit, alice);
+        assertEquals("GOAL_CHANGED", bindings.state(goal.getId(), alice).getFirst().status());
+        assertTrue(bindings.check(goal.getId(), "r", checkRequest(2, version), alice).acceptanceEligible());
+    }
+
+    @Test void expiredAndCorruptBodiesNeverRemainEligible() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        // Direct DB mutation is a corruption/clock fixture, not a supported publication API.
+        jdbc.update("UPDATE mate_goal_json_artifact SET json_body='{}' WHERE artifact_id=?", version.artifactId());
+        assertEquals("CORRUPT", bindings.state(goal.getId(), alice).getFirst().status());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, version), alice));
+        var next = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, next), alice);
+        jdbc.update("UPDATE mate_goal_json_artifact SET expires_at=? WHERE artifact_id=?", java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), next.artifactId());
+        assertEquals("EXPIRED", bindings.state(goal.getId(), alice).getFirst().status());
+        assertThrows(MateClawException.class, () -> bindings.check(goal.getId(), "r", checkRequest(1, next), alice));
+    }
+
+    @Test void rollbackRemovesBindingAndDoesNotAdvanceGoalVersion() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        long before = goals.getById(goal.getId()).getVersion();
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            assertTrue(bindings.check(goal.getId(), "r", checkRequest(1, version), alice).acceptanceEligible());
+            status.setRollbackOnly();
+        });
+        assertEquals("UNBOUND", bindings.state(goal.getId(), alice).getFirst().status());
+        assertEquals(before, goals.getById(goal.getId()).getVersion().longValue());
+    }
+
+    @Test void racingRequirementEditCannotLeaveAnEligibleOldBinding() throws Exception {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var check = workers.submit(() -> {
+                start.await();
+                try { bindings.check(goal.getId(), "r", checkRequest(1, version), alice); return true; }
+                catch (MateClawException changed) { return false; }
+            });
+            var edit = workers.submit(() -> { start.await(); return acceptance.configure(goal.getId(), "r", request(1, "sources"), alice); });
+            start.countDown();
+            check.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(2, edit.get(10, java.util.concurrent.TimeUnit.SECONDS).revision());
+        }
+        assertFalse(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible());
     }
 
 }

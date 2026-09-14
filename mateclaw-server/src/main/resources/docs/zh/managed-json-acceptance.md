@@ -2,7 +2,7 @@
 
 在 Goal 面板展开“JSON 验收要求”，由对话所有者或管理员显式保存要求。每个 Goal 最多 8 条要求，每条绑定一个产物槽和 1–16 个顶层字段。字段检查表示字段存在且不为 null；false、0 和空字符串允许，不等于内容质量判断。保存后不可关闭强验收模式，可以带当前 revision 修改要求；旧修订会返回冲突。
 
-当前阶段已提供用户配置与独立受管版本存储；绑定检查和强验收成功完成路径尚未接通。选中此模式的 Goal 暂时拒绝完成，不会回退到文字声明；未选中的 Goal 保持既有行为。
+当前阶段已提供用户配置与独立受管版本存储；绑定检查已接通，强验收成功完成路径尚未接通。选中此模式的 Goal 暂时拒绝完成，不会回退到文字声明；未选中的 Goal 保持既有行为。
 
 ## 受管版本接口
 
@@ -23,3 +23,10 @@
 `getManagedGoalJsonSlots` 返回当前 Goal 的用户要求、槽和 generation；`publishManagedGoalJson` 接收 `artifactSlot`、字符串 `expectedGeneration` 和 `jsonContent`。工具不能配置要求，也不能传 Goal ID、账户或 owner fence。普通会话必须携带已认证账户的内部 ID；持久 Goal 的调度执行必须同时匹配当前 continuation、attempt、owner token 和有效租约。两种入口都重新检查对话、工作区、Agent 和启用账户。代理委派的默认禁止列表包含这两个工具，服务仍独立检查身份。
 
 发布与调度结算按 Goal 锁串行化，晚到的旧 owner 不得继续写入。租约结束不会改写已经合法发布的历史版本。匿名会话和没有绑定 Goal attempt 的 cron 不支持此发布协议；身份缺失直接拒绝，不以显示用户名代替认证。
+
+
+## 绑定检查
+
+发布后，调用 `POST /checks/{criterionKey}`，提交 `expectedRequirementRevision`、`artifactId`、`expectedGeneration`；代理使用 `checkManagedGoalJson` 传相同字段。所有修订和 generation 在代理工具里都是字符串。服务端只检查当前槽的指定版本，运行自己的字段 recipe，不接受调用方提供的 PASS。返回 `acceptanceEligible=true` 表示这条要求当前匹配，不能代表整个 Goal 已完成。
+
+`GET /checks` 读取每条要求的当前资格。要求修改、Goal 定义修改、槽出现新版本、版本过期或正文完整性失败都会使旧绑定失效；需要按当前条件重新检查。每次绑定与 Goal version 更新同事务，失败回滚不留下通过凭据。历史诊断接口的 `acceptanceEligible=false` 保持不变，只有此受管版本检查产生绑定。当前统一完成入口仍在接入中。
