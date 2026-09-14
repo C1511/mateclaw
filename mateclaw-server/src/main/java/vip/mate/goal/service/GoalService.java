@@ -56,11 +56,15 @@ public interface GoalService {
     GoalEntity resume(Long id, String username);
     GoalEntity abandon(Long id, String username);
 
-    /** Flip active->completed. Writes a 'completed' event. */
+    /** Trusted platform completion. Runtime callers must use markRuntimeCompleted to carry their identity. */
     GoalEntity markCompleted(Long id, GoalEvaluationResult result);
 
-    /** Complete an evaluator result only if the current active checklist still passes with evidence. */
+    /** Trusted platform evaluation completion. Runtime callers must use markRuntimeEvaluatedCompleted. */
     GoalEntity markEvaluatedCompleted(Long id, GoalEvaluationResult result);
+
+    /** Runtime entry points carry server-issued identity; selected JSON goals also fence the completing owner. */
+    GoalEntity markRuntimeCompleted(Long id, GoalEvaluationResult result, vip.mate.agent.context.ChatOrigin origin);
+    GoalEntity markRuntimeEvaluatedCompleted(Long id, GoalEvaluationResult result, vip.mate.agent.context.ChatOrigin origin);
 
     /** Flip active->exhausted with the reason that triggered it. */
     GoalEntity markExhausted(Long id, String reason);

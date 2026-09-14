@@ -220,10 +220,10 @@ class GoalEvaluationNodeContinuationTest {
         Fixture f = new Fixture();
         var completed = new GoalEvaluationResult(1.0, "", "completed", true, "fixture", 1, 0, List.of(), null);
         when(f.evaluationService.evaluate(any(), anyList(), anyString())).thenReturn(completed);
-        when(f.goalService.markEvaluatedCompleted(eq(1L), eq(completed)))
+        when(f.goalService.markRuntimeEvaluatedCompleted(eq(1L), eq(completed), any()))
                 .thenThrow(new vip.mate.exception.MateClawException(409, "current criteria changed"));
         var out = f.node().apply(f.state(FinishReason.NORMAL.getValue(), 0, 0));
-        verify(f.goalService).markEvaluatedCompleted(1L, completed);
+        verify(f.goalService).markRuntimeEvaluatedCompleted(eq(1L), eq(completed), any());
         verify(f.goalService, never()).markCompleted(any(), any());
         @SuppressWarnings("unchecked")
         var events = (List<GraphEventPublisher.GraphEvent>) out.get(MateClawStateKeys.PENDING_EVENTS);
@@ -237,7 +237,7 @@ class GoalEvaluationNodeContinuationTest {
         when(f.goalService.getById(1L)).thenReturn(goal);
         var claim = new GoalEvaluationResult(1, "done", "completed", true, "fixture", 1, 0, List.of(), null);
         when(f.evaluationService.evaluate(any(), anyList(), anyString())).thenReturn(claim);
-        when(f.goalService.markEvaluatedCompleted(1L, claim)).thenThrow(new vip.mate.exception.MateClawException(409, "binding missing"));
+        when(f.goalService.markRuntimeEvaluatedCompleted(eq(1L), eq(claim), any())).thenThrow(new vip.mate.exception.MateClawException(409, "binding missing"));
         var out = f.node().apply(f.state(FinishReason.NORMAL.getValue(), 0, 0));
         var result = (Map<?, ?>) out.get(MateClawStateKeys.GOAL_EVALUATION_RESULT);
         assertEquals(false, result.get("completed"));

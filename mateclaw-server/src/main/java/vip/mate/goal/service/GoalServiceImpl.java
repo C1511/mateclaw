@@ -73,6 +73,10 @@ public class GoalServiceImpl implements GoalService {
      */
     private vip.mate.memory.spi.MemoryManager memoryManager;
     private GoalJsonBindingService jsonBindings;
+    private ManagedGoalJsonService managedArtifacts;
+
+    @Autowired
+    public void setManagedArtifacts(ManagedGoalJsonService managedArtifacts) { this.managedArtifacts = managedArtifacts; }
 
     @Autowired
     public void setJsonBindings(GoalJsonBindingService jsonBindings) {
@@ -380,7 +384,7 @@ public class GoalServiceImpl implements GoalService {
     @Override
     @Transactional
     public GoalEntity markCompleted(Long id, GoalEvaluationResult result) {
-        return completeGoal(id, result, false);
+        return completeGoal(id, result, false, null, false);
     }
 
     @Override
@@ -391,10 +395,28 @@ public class GoalServiceImpl implements GoalService {
             throw new MateClawException("err.goal.completion_not_verified", 409,
                     "Automatic completion requires a completed evaluation");
         }
-        return completeGoal(id, result, true);
+        return completeGoal(id, result, true, null, false);
     }
 
-    private GoalEntity completeGoal(Long id, GoalEvaluationResult result, boolean evaluated) {
+    @Override
+    @Transactional
+    public GoalEntity markRuntimeCompleted(Long id, GoalEvaluationResult result, vip.mate.agent.context.ChatOrigin origin) {
+        return completeGoal(id, result, false, origin, true);
+    }
+
+    @Override
+    @Transactional
+    public GoalEntity markRuntimeEvaluatedCompleted(Long id, GoalEvaluationResult result, vip.mate.agent.context.ChatOrigin origin) {
+        if (result == null || !result.completed()
+                || !GoalEvaluationResult.DECISION_COMPLETED.equals(result.decision())) {
+            throw new MateClawException("err.goal.completion_not_verified", 409,
+                    "Automatic completion requires a completed evaluation");
+        }
+        return completeGoal(id, result, true, origin, true);
+    }
+
+    private GoalEntity completeGoal(Long id, GoalEvaluationResult result, boolean evaluated,
+                                   vip.mate.agent.context.ChatOrigin origin, boolean runtimeCaller) {
         boolean[] transitioned = {false};
         var jsonProof = new java.util.concurrent.atomic.AtomicReference<List<GoalJsonBindingService.State>>(List.of());
         GoalEntity g = retryOptimistic(id, "markCompleted", fresh -> {
@@ -407,6 +429,12 @@ public class GoalServiceImpl implements GoalService {
                             "Automatic completion cannot replace another terminal state");
                 }
                 return null; // idempotent
+            }
+            ManagedGoalJsonService.RuntimeScope runtime = null;
+            if (runtimeCaller && fresh.isJsonAcceptanceRequired()) {
+                if (managedArtifacts == null) throw new MateClawException(409, "Managed JSON runtime verification is unavailable");
+                runtime = managedArtifacts.runtimeGoal(origin);
+                if (runtime.goal().id() != fresh.getId()) throw new MateClawException(403, "Completion runtime goal mismatch");
             }
             if (evaluated && result.evaluationRevision() != fresh.getEvaluationRevision()) {
                 throw new MateClawException("err.goal.completion_not_verified", 409,
@@ -441,6 +469,7 @@ public class GoalServiceImpl implements GoalService {
                 if (jsonBindings == null) throw new MateClawException("err.goal.json_acceptance_required", 409,
                         "Managed JSON verification service is unavailable");
                 jsonProof.set(jsonBindings.requireForCompletion(fresh));
+                if (runtime != null) ManagedGoalJsonService.verifyLease(runtime);
             }
             bumpVersionAndTime(w);
             transitioned[0] = true;

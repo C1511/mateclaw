@@ -554,4 +554,51 @@ class GoalJsonAcceptanceIntegrationTest {
         assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus());
     }
 
+    @Test void expiredRuntimeCannotCompleteEvenWithCurrentPassingBindings() {
+        GoalEntity goal = goal(true);
+        goals.appendCriterion(goal.getId(), "report", alice);
+        var evaluation = new GoalEvaluationResult(1, "checked", "completed", true, "fixture", 1, 0,
+                List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "semantic fixture")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var version = artifacts.publishForRuntime(origin, "report", publication(0, "{\"summary\":true}"));
+        bindings.checkForRuntime(origin, "r", checkRequest(1, version));
+        var properties = new vip.mate.goal.config.GoalProperties(); properties.setEnabled(true);
+        var tool = new vip.mate.tool.builtin.GoalManagementTool(goals, properties, new com.fasterxml.jackson.databind.ObjectMapper(), null);
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().minusSeconds(1), run.attempt().id());
+        assertTrue(tool.completeGoal(origin.toToolContext()).contains("error"));
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().plusSeconds(60), run.attempt().id());
+        assertTrue(tool.completeGoal(origin.toToolContext()).contains("\"status\":\"completed\""));
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void runtimeCompletionRejectsMissingForeignAndRevokedIdentity(boolean automatic) {
+        GoalEntity goal = goal(false);
+        goals.appendCriterion(goal.getId(), "report", alice);
+        var evaluation = new GoalEvaluationResult(1, "checked", "completed", true, "fixture", 1, 0,
+                List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "semantic fixture")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        var owner = accountOrigin(goal, alice);
+        for (var origin : List.of(vip.mate.agent.context.ChatOrigin.EMPTY, accountOrigin(goal, bob),
+                owner.withAgent(999L), owner.withWorkspace(999L, null), accountOrigin(goal(false), alice))) {
+            assertThrows(MateClawException.class, () -> runtimeComplete(goal, evaluation, origin, automatic));
+        }
+        jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
+        assertThrows(MateClawException.class, () -> runtimeComplete(goal, evaluation, owner, automatic));
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        jdbc.update("UPDATE mate_user SET enabled=TRUE WHERE username=?", alice);
+        assertEquals(GoalStatus.COMPLETED, runtimeComplete(goal, evaluation, owner, automatic).getStatus());
+    }
+
+    private GoalEntity runtimeComplete(GoalEntity goal, GoalEvaluationResult evaluation, vip.mate.agent.context.ChatOrigin origin, boolean automatic) {
+        return automatic ? goals.markRuntimeEvaluatedCompleted(goal.getId(), evaluation, origin)
+                : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
+    }
+
 }
