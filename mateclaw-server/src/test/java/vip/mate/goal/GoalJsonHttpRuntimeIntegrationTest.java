@@ -64,9 +64,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"false,sync", "true,sync", "false,stream", "true,stream",
-        "false,scheduled", "true,scheduled", "false,recovered", "true,recovered"})
-    void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry) throws Exception {
+    @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
+        "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
+        "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false"})
+    void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
         boolean recovered = entry.equals("recovered");
         String username = "http-json-" + UUID.randomUUID();
@@ -89,7 +90,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
             goals.recordEvaluation(goal.getId(), new GoalEvaluationResult(1, "offline semantic fixture", "completed", true,
                 "fixture", 1, 0, List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null), 1, 1);
         }
-        when(evaluator.evaluate(any(), anyList(), anyString())).thenReturn(GoalEvaluationResult.fallback("offline_http_fixture"));
+        when(evaluator.evaluate(any(), anyList(), anyString())).thenReturn(accepted
+            ? GoalEvaluationResult.fallback("offline_http_fixture")
+            : new GoalEvaluationResult(1, "offline semantic PASS without a managed binding", "completed", true,
+                "fixture", 1, 0, List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null));
         JsonNode login = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password));
         String token = login.path("data").path("token").asText();
         assertFalse(token.isBlank(), login.toString());
@@ -134,6 +138,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
                         "{\"needs_planning\":true,\"steps\":[\"Produce, publish, check and complete the managed JSON report\"]}"))));
             }
             if (plan) step--;
+            if (!accepted) {
+                if (step == 0) return new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("")
+                    .toolCalls(List.of(new AssistantMessage.ToolCall("read-unbound", "function", "getManagedGoalJsonSlots", "{}"))).build())));
+                return new ChatResponse(List.of(new Generation(new AssistantMessage("PASS from offline fixture."))));
+            }
             List<ToolResponseMessage.ToolResponse> responses = prompt.getInstructions().stream()
                     .filter(ToolResponseMessage.class::isInstance).map(ToolResponseMessage.class::cast)
                     .flatMap(m -> m.getResponses().stream()).toList();
@@ -175,15 +184,16 @@ class GoalJsonHttpRuntimeIntegrationTest {
         String message = "Produce, publish, check and complete the managed JSON report.";
         if (scheduled) {
             SegmentOutcome outcome = runner.run(run, message, recovered);
-            assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus(), outcome.toString());
+            assertEquals(accepted ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus(), outcome.toString());
+            if (!accepted) assertInstanceOf(SegmentOutcome.Retry.class, outcome, "Runner must consume the actual rejected-completion event");
             var savedAttempt = attempts.get(run.attempt().id());
             assertEquals("message_saved", savedAttempt.checkpointType());
             assertNotNull(savedAttempt.assistantMessageId());
             assertTrue(jdbc.queryForObject("SELECT content FROM mate_message WHERE id=?", String.class,
-                savedAttempt.assistantMessageId()).contains("Managed JSON fixture completed."));
+                savedAttempt.assistantMessageId()).contains(accepted ? "Managed JSON fixture completed." : "PASS from offline fixture."));
             assertTrue(coordinator.settle(run, outcome, java.time.LocalDateTime.now()));
-            assertEquals("succeeded", attempts.get(run.attempt().id()).state());
-            assertEquals("completed", continuations.get(goal.getId()).state());
+            assertEquals(accepted ? "succeeded" : "retryable", attempts.get(run.attempt().id()).state());
+            assertEquals(accepted ? "completed" : "retry", continuations.get(goal.getId()).state());
         } else if (entry.equals("stream")) {
             String events = requestBody("POST", "/api/v1/chat/stream", token,
                 Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
@@ -195,9 +205,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
             assertEquals(200, result.path("code").asInt(), result.toString());
             assertTrue(result.path("data").asText().contains("Managed JSON fixture completed."), result.toString());
         }
-        assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus());
-        assertTrue(bindings.state(goal.getId(), username).getFirst().acceptanceEligible());
-        assertTrue(calls.get() >= 6 && calls.get() <= 10, "Bounded offline model calls: " + calls.get());
+        assertEquals(accepted ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        assertEquals(accepted, bindings.state(goal.getId(), username).getFirst().acceptanceEligible());
+        assertTrue(calls.get() >= (accepted ? 6 : 2) && calls.get() <= (accepted ? 10 : 4), "Bounded offline model calls: " + calls.get());
+        if (!accepted) assertEquals(recovered ? 1 : 0,
+            jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
         verify(modelFactory, atLeastOnce()).buildFor(any(), any());
     }
 
