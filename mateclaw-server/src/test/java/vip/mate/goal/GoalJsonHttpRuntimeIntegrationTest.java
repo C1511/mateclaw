@@ -66,9 +66,11 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
         "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
-        "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false"})
+        "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
+        "false,queued,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
+        boolean queued = entry.equals("queued");
         boolean recovered = entry.equals("recovered");
         String username = "http-json-" + UUID.randomUUID();
         String conversation = UUID.randomUUID().toString();
@@ -177,12 +179,43 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     .toolCalls(List.of(new AssistantMessage.ToolCall("json-" + step, "function", name, arguments))).build())));
         };
         when(model.call(any(Prompt.class))).thenAnswer(script);
-        when(model.stream(any(Prompt.class))).thenAnswer(invocation -> Flux.just(script.answer(invocation)));
+        var firstSubscribed = new java.util.concurrent.CountDownLatch(1);
+        var initialResponse = reactor.core.publisher.Sinks.<ChatResponse>one();
+        var firstStream = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(model.stream(any(Prompt.class))).thenAnswer(invocation -> {
+            if (queued && firstStream.compareAndSet(true, false)) {
+                return initialResponse.asMono().flux().doOnSubscribe(subscription -> firstSubscribed.countDown());
+            }
+            return Flux.just(script.answer(invocation));
+        });
 
         when(model.getDefaultOptions()).thenReturn(org.springframework.ai.chat.prompt.ChatOptions.builder().model("json-http-fixture").build());
         when(modelFactory.buildFor(any(), any())).thenReturn(model);
         String message = "Produce, publish, check and complete the managed JSON report.";
-        if (scheduled) {
+        if (queued) {
+            var response = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    return requestBody("POST", "/api/v1/chat/stream", token,
+                        Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", "Wait for a follow-up fixture."));
+                } catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+            });
+            try {
+                assertTrue(firstSubscribed.await(10, java.util.concurrent.TimeUnit.SECONDS), "Initial HTTP turn must reach the actual model boundary");
+                JsonNode enqueue = request("POST", "/api/v1/chat/" + conversation + "/interrupt", token,
+                    Map.of("agentId", String.valueOf(agentId), "message", message));
+                assertTrue(enqueue.path("data").path("queued").asBoolean(), enqueue.toString());
+                long queueId = Long.parseLong(enqueue.path("data").path("queueItemId").asText());
+                assertEquals(userId, jdbc.queryForObject("SELECT requester_user_id FROM mate_conversation_input_queue WHERE id=?", Long.class, queueId));
+                assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, initialResponse.tryEmitValue(
+                    new ChatResponse(List.of(new Generation(new AssistantMessage("Initial fixture turn finished."))))));
+                String events = response.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                assertTrue(events.contains("Managed JSON fixture completed."), events);
+                assertEquals("consumed", jdbc.queryForObject("SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queueId));
+            } finally {
+                initialResponse.tryEmitEmpty();
+                response.cancel(true);
+            }
+        } else if (scheduled) {
             SegmentOutcome outcome = runner.run(run, message, recovered);
             assertEquals(accepted ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus(), outcome.toString());
             if (!accepted) assertInstanceOf(SegmentOutcome.Retry.class, outcome, "Runner must consume the actual rejected-completion event");
