@@ -25,7 +25,7 @@ async function submit(host: HTMLElement) { host.querySelector('form')!.dispatchE
 afterEach(() => { apps.splice(0).forEach(app => app.unmount()); document.body.innerHTML = ''; vi.resetAllMocks() })
 describe('user JSON acceptance requirements', () => {
   it('loads without writing and requires an explicit save to opt in', async () => {
-    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: false, requirements: [] } })
+    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: false, status: 'active', requirements: [] } })
     vi.mocked(goalJsonAcceptanceApi.configure).mockResolvedValue({ data: requirement() })
     const { host } = mount(); expect(goalJsonAcceptanceApi.get).not.toHaveBeenCalled(); await open(host)
     expect(goalJsonAcceptanceApi.configure).not.toHaveBeenCalled()
@@ -39,7 +39,7 @@ describe('user JSON acceptance requirements', () => {
   })
   it('preserves opaque revisions and refuses to resubmit a stale edit before reload', async () => {
     const revision = '9223372036854775802'
-    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, requirements: [requirement(revision)] } })
+    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, status: 'active', requirements: [requirement(revision)] } })
     vi.mocked(goalJsonAcceptanceApi.configure).mockRejectedValue({ code: 409 })
     const { host } = mount(); await open(host)
     host.querySelector<HTMLButtonElement>('[data-json-requirement-edit]')!.click(); await flush()
@@ -49,8 +49,23 @@ describe('user JSON acceptance requirements', () => {
     expect(host.querySelector<HTMLButtonElement>('[data-json-requirement-save]')!.disabled).toBe(true)
     await submit(host); expect(goalJsonAcceptanceApi.configure).toHaveBeenCalledTimes(1)
   })
+  it('reloads a server-completed goal as read-only even while the parent status is stale', async () => {
+    vi.mocked(goalJsonAcceptanceApi.get)
+      .mockResolvedValueOnce({ data: { required: true, status: 'active', requirements: [requirement()] } })
+      .mockResolvedValueOnce({ data: { required: true, status: 'completed', requirements: [requirement()] } })
+    vi.mocked(goalJsonAcceptanceApi.configure).mockRejectedValue({ code: 409 })
+    const { host, props } = mount(); await open(host)
+    host.querySelector<HTMLButtonElement>('[data-json-requirement-edit]')!.click(); await flush(); await submit(host)
+    host.querySelector<HTMLButtonElement>('[data-json-acceptance-refresh]')!.click(); await flush()
+    expect(props.status).toBe('active')
+    expect(host.querySelectorAll('[data-json-requirement]')).toHaveLength(1)
+    expect(host.querySelector('form')).toBeNull()
+    expect(host.querySelector('[data-json-requirement-edit]')).toBeNull()
+    expect(host.querySelector('[data-json-acceptance-status]')?.textContent).toContain('Completed')
+    expect(goalJsonAcceptanceApi.configure).toHaveBeenCalledTimes(1)
+  })
   it('clears old requirements and drafts after access is revoked', async () => {
-    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, requirements: [requirement()] } })
+    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, status: 'active', requirements: [requirement()] } })
     vi.mocked(goalJsonAcceptanceApi.configure).mockRejectedValue({ code: 403 })
     const { host } = mount(); await open(host)
     host.querySelector<HTMLButtonElement>('[data-json-requirement-edit]')!.click(); await flush(); await submit(host)
@@ -61,16 +76,16 @@ describe('user JSON acceptance requirements', () => {
   it('does not show an old goal read response after selection changes', async () => {
     let resolve!: (value: unknown) => void
     vi.mocked(goalJsonAcceptanceApi.get).mockImplementationOnce(() => new Promise(r => { resolve = r }) as never)
-      .mockResolvedValueOnce({ data: { required: false, requirements: [] } })
+      .mockResolvedValueOnce({ data: { required: false, status: 'active', requirements: [] } })
     const { host, props } = mount(); await open(host); props.goalId = 'new'; await flush()
-    resolve({ data: { required: true, requirements: [requirement()] } }); await flush()
+    resolve({ data: { required: true, status: 'active', requirements: [requirement()] } }); await flush()
     expect(host.querySelectorAll('[data-json-requirement]')).toHaveLength(0)
     expect(host.querySelector('[data-json-acceptance-mode]')?.textContent).toContain('has not selected')
   })
   it('does not apply a delayed save to a different goal', async () => {
     let resolve!: (value: unknown) => void
-    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValueOnce({ data: { required: true, requirements: [requirement()] } })
-      .mockResolvedValueOnce({ data: { required: false, requirements: [] } })
+    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValueOnce({ data: { required: true, status: 'active', requirements: [requirement()] } })
+      .mockResolvedValueOnce({ data: { required: false, status: 'active', requirements: [] } })
     vi.mocked(goalJsonAcceptanceApi.configure).mockImplementationOnce(() => new Promise(r => { resolve = r }) as never)
     const { host, props } = mount(); await open(host)
     host.querySelector<HTMLButtonElement>('[data-json-requirement-edit]')!.click(); await flush(); await submit(host)
@@ -79,7 +94,7 @@ describe('user JSON acceptance requirements', () => {
     expect(host.querySelector('[data-json-acceptance-mode]')?.textContent).toContain('has not selected')
   })
   it('does not submit duplicate fields and presents terminal goals as read-only', async () => {
-    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, requirements: [requirement()] } })
+    vi.mocked(goalJsonAcceptanceApi.get).mockResolvedValue({ data: { required: true, status: 'active', requirements: [requirement()] } })
     const { host, props } = mount(); await open(host)
     host.querySelector<HTMLButtonElement>('[data-json-requirement-edit]')!.click(); await flush()
     await fill(host, '[data-json-requirement-fields]', 'summary\nsummary'); await submit(host)

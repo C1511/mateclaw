@@ -7,7 +7,7 @@ export interface GoalJsonRequirement {
   requiredFields: string[]
   configuredBy: string
 }
-export interface GoalJsonAcceptanceView { required: boolean; requirements: GoalJsonRequirement[] }
+export interface GoalJsonAcceptanceView { required: boolean; status: string; requirements: GoalJsonRequirement[] }
 export interface ConfigureJsonRequirement { expectedRevision: string; artifactSlot: string; requiredFields: string[] }
 export interface ManagedJsonArtifact {
   artifactId: string; artifactSlot: string; generation: string; sha256: string; byteLength: number

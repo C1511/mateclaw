@@ -17,7 +17,8 @@ const slot = ref('')
 const fields = ref('')
 const revision = ref('0')
 let generation = 0
-const editable = computed(() => ['active', 'paused'].includes(props.status))
+const currentStatus = computed(() => ['active', 'paused'].includes(props.status) ? view.value?.status : props.status)
+const editable = computed(() => !!view.value && ['active', 'paused'].includes(currentStatus.value ?? ''))
 const busy = computed(() => loading.value || saving.value)
 
 function resetForm() { key.value = ''; slot.value = ''; fields.value = ''; revision.value = '0'; conflict.value = false }
@@ -76,7 +77,7 @@ async function save() {
       expectedRevision: revision.value, artifactSlot: slot.value, requiredFields: required,
     })
     if (request !== generation || !view.value) return
-    view.value = { required: true, requirements: [...view.value.requirements.filter(r => r.criterionKey !== data.criterionKey), data]
+    view.value = { required: true, status: view.value.status, requirements: [...view.value.requirements.filter(r => r.criterionKey !== data.criterionKey), data]
       .sort((a, b) => a.criterionKey.localeCompare(b.criterionKey)) }
     resetForm()
   } catch (failure) {
@@ -105,6 +106,7 @@ onBeforeUnmount(() => { generation++ })
       <p v-if="error" role="alert">{{ t(error) }}</p>
       <p v-if="loading" role="status">{{ t('common.loading') }}</p>
       <template v-if="view">
+        <p v-if="currentStatus" data-json-acceptance-status>{{ t('goalJsonAcceptance.historyStatus.' + currentStatus) }}</p>
         <p data-json-acceptance-mode>{{ t(view.required ? 'goalJsonAcceptance.required' : 'goalJsonAcceptance.notSelected') }}</p>
         <ul v-if="view.requirements.length">
           <li v-for="requirement in view.requirements" :key="requirement.criterionKey" data-json-requirement>
@@ -113,7 +115,7 @@ onBeforeUnmount(() => { generation++ })
             <button v-if="editable" type="button" :disabled="busy" data-json-requirement-edit @click="edit(requirement)">{{ t('goalJsonAcceptance.edit') }}</button>
           </li>
         </ul>
-        <ManagedGoalJsonVersions v-if="view.required" :goal-id="goalId" :status="status" :requirements="view.requirements" @access-lost="showFailure({ code: 403 })" />
+        <ManagedGoalJsonVersions v-if="view.required" :goal-id="goalId" :status="currentStatus || status" :requirements="view.requirements" @access-lost="showFailure({ code: 403 })" />
         <form v-if="editable" @submit.prevent="save">
           <p>{{ t('goalJsonAcceptance.selectionNotice') }}</p>
           <label>{{ t('goalJsonAcceptance.key') }}<input v-model="key" data-json-requirement-key required maxlength="64" :disabled="busy || revision !== '0'" placeholder="report-fields" /></label>

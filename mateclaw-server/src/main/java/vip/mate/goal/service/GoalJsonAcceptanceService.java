@@ -25,13 +25,13 @@ public class GoalJsonAcceptanceService {
     public record ConfigureRequest(Long expectedRevision, String artifactSlot, List<String> requiredFields) { }
     public record Requirement(String criterionKey, String artifactSlot, long revision,
                               List<String> requiredFields, String configuredBy) { }
-    public record View(boolean required, List<Requirement> requirements) { }
+    public record View(boolean required, String status, List<Requirement> requirements) { }
     record GoalScope(long id, String conversationId, long workspaceId, long agentId, String status, boolean required) { }
 
     @Transactional
     public View get(Long goalId, String username) {
         GoalScope goal = authorizedGoal(goalId, username, true);
-        return new View(goal.required(), requirements(goalId));
+        return new View(goal.required(), goal.status(), requirements(goalId));
     }
 
     @Transactional

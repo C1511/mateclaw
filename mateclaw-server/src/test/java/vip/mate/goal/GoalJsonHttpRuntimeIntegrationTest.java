@@ -248,6 +248,8 @@ class GoalJsonHttpRuntimeIntegrationTest {
         assertTrue(calls.get() >= (accepted ? 6 : 2) && calls.get() <= (accepted ? 10 : 4), "Bounded offline model calls: " + calls.get());
         if (!accepted) assertEquals(recovered ? 1 : 0,
             jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+        JsonNode currentRequirements = request("GET", "/api/v1/goals/" + goal.getId() + "/json-acceptance", token, null);
+        assertEquals(accepted ? "completed" : "active", currentRequirements.path("data").path("status").asText());
         verify(modelFactory, atLeastOnce()).buildFor(any(), any());
     }
 
@@ -273,7 +275,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
             .timeout(Duration.ofSeconds(45)).header("Content-Type", "application/json").header("X-Workspace-Id", "1");
         if (token != null) builder.header("Authorization", "Bearer " + token);
         var response = HttpClient.newHttpClient().send(builder.method(method,
-            HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build(), HttpResponse.BodyHandlers.ofString());
+            (body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)))).build(), HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode(), response.body());
         return response.body();
     }

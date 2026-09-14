@@ -4,13 +4,13 @@ Open a conversation with an existing Goal, click the Goals button in its header,
 
 User configuration, independent managed versions, binding checks and the shared completion gate are connected. Every current requirement needs a matching valid binding before a selected goal can complete under its existing completion rules. Automatic evaluation, explicit completeGoal and retries share that gate. Unselected goals retain existing behavior.
 
-The conversation Goals panel includes paused and terminal goals, loading 20 at a time with an option to load older records. Paused goals still allow requirement edits, publication and checks; terminal goals only expose existing requirements and content. Closing the panel, switching conversations or leaving the page clears its contents, and a failed refresh clears the old list. Reading history does not resume execution.
+The conversation Goals panel includes paused and terminal goals, loading 20 at a time with an option to load older records. Paused goals still allow requirement edits, publication and checks; terminal goals only expose existing requirements and content. Closing the panel, switching conversations or leaving the page clears its contents, and a failed refresh clears the old list. Reading history does not resume execution. Reloading requirements also refreshes the Goal status, so a goal completed since the list was loaded becomes read-only in the acceptance panel.
 
 ## Managed version API
 
 Prefix: `/api/v1/goals/{goalId}/json-acceptance`. An enabled account with conversation-owner or administrator permission is required. Preserve IDs, revisions and generations as strings in clients.
 
-- `GET /`: read required mode and requirements.
+- `GET /`: read required mode, current Goal status and requirements.
 - `PUT /requirements/{criterionKey}`: send `expectedRevision`, `artifactSlot` and `requiredFields`; use revision `0` for a new requirement.
 - `GET /artifacts`: list required slots and current versions; an empty slot has generation `0`.
 - `POST /artifacts/{slot}`: send `expectedGeneration` and `jsonContent` (a string containing the original JSON body) to append a version and atomically advance the slot.
