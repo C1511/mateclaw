@@ -100,8 +100,14 @@ public class GoalRunCoordinator {
 
     private Settlement classify(ClaimedRun run,SegmentOutcome outcome,GoalEntity fresh,LocalDateTime now) {
         int failures=run.candidate().failures();
-        if(fresh!=null && fresh.getStatus()==GoalStatus.COMPLETED || outcome instanceof SegmentOutcome.Complete) {
+        if(fresh!=null && fresh.getStatus()==GoalStatus.COMPLETED
+                || outcome instanceof SegmentOutcome.Complete && (fresh==null || !fresh.isJsonAcceptanceRequired())) {
             return new Settlement("succeeded","completed",now,0,"goal_completed",null);
+        }
+        if(outcome instanceof SegmentOutcome.Complete && fresh!=null && fresh.isJsonAcceptanceRequired()) {
+            return eligible(fresh)
+                    ? new Settlement("retryable","retry",now.plusSeconds(5),Math.min(1000,failures+1),"json_completion_not_committed","acceptance")
+                    : new Settlement("cancelled","paused",now,0,"goal_not_runnable",null);
         }
         if(fresh!=null && fresh.getStatus()==GoalStatus.PAUSED && goals.isBudgetExhausted(fresh)) {
             return new Settlement("succeeded","budget_limited",now,0,goals.exhaustionReason(fresh),null);

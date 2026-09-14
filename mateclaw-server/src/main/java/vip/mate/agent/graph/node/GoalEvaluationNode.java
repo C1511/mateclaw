@@ -232,8 +232,15 @@ public class GoalEvaluationNode implements NodeAction {
         } catch (Throwable t) {
             log.warn("[GoalEvaluationNode] terminal write failed for goal={} — degrading to evaluated-only: {}",
                     refreshed.getId(), t.toString());
+            Map<String, Object> outward = result.toMap();
+            if (refreshed.isJsonAcceptanceRequired() && result.completed()) {
+                outward.put("completed", false);
+                outward.put("decision", GoalEvaluationResult.DECISION_CONTINUE);
+                outward.put("gap", "Managed JSON completion was not committed. "
+                        + vip.mate.goal.service.GoalJsonProtocolHints.INSTRUCTIONS);
+            }
             return MateClawStateAccessor.output()
-                    .goalEvaluationResult(result.toMap())
+                    .goalEvaluationResult(outward)
                     .goalEvaluatedThisRun(true)
                     .events(List.of(skippedEvent(refreshed.getId(), "terminal_write_failed")))
                     .build();

@@ -231,6 +231,21 @@ class GoalEvaluationNodeContinuationTest {
         assertEquals(Boolean.TRUE, out.get(MateClawStateKeys.GOAL_EVALUATED_THIS_RUN));
     }
 
+    @Test void rejectedManagedCompletionDoesNotExposeACompletedResult() throws Exception {
+        Fixture f = new Fixture();
+        GoalEntity goal = new GoalEntity(); goal.setId(1L); goal.setJsonAcceptanceRequired(true);
+        when(f.goalService.getById(1L)).thenReturn(goal);
+        var claim = new GoalEvaluationResult(1, "done", "completed", true, "fixture", 1, 0, List.of(), null);
+        when(f.evaluationService.evaluate(any(), anyList(), anyString())).thenReturn(claim);
+        when(f.goalService.markEvaluatedCompleted(1L, claim)).thenThrow(new vip.mate.exception.MateClawException(409, "binding missing"));
+        var out = f.node().apply(f.state(FinishReason.NORMAL.getValue(), 0, 0));
+        var result = (Map<?, ?>) out.get(MateClawStateKeys.GOAL_EVALUATION_RESULT);
+        assertEquals(false, result.get("completed"));
+        assertEquals("continue", result.get("decision"));
+        assertTrue(result.get("gap").toString().contains("checkManagedGoalJson"));
+        verify(f.goalService, never()).markCompleted(any(), any());
+    }
+
     // ===== Test fixture =====
 
     private static final class Fixture {

@@ -730,6 +730,10 @@ public class AgentBindingService implements AgentBindingResolver {
             "addGoalCriterion",
             "completeGoal",
             "getGoalStatus",
+            // User-selected managed JSON protocol, authorized again inside each tool service.
+            "getManagedGoalJsonSlots",
+            "publishManagedGoalJson",
+            "checkManagedGoalJson",
             "waitForGoalInput",
             // Conversation-scoped progress ledger — same rationale as the
             // goal primitives above. Long multi-step research / drafting

@@ -87,4 +87,15 @@ class GoalRunCoordinatorTest {
         assertTrue(coordinator.settle(second,new SegmentOutcome.Continue("unfinished"),secondStart));
         assertEquals(secondStart.plusSeconds(600),continuations.get(1L).nextRunAt());
     }
+    @Test void selectedJsonGoalCannotSettleCompletedFromSegmentClaimAlone() {
+        goal.setJsonAcceptanceRequired(true);
+        var run=coordinator.claim(continuations.get(1L),goal,now);
+        assertNotNull(run);
+        assertTrue(coordinator.markRunning(run,now));
+        assertTrue(coordinator.settle(run,new SegmentOutcome.Complete("model claim"),now));
+        assertEquals("retry",continuations.get(1L).state());
+        assertEquals("retryable",attempts.get(run.attempt().id()).state());
+        assertEquals("json_completion_not_committed",continuations.get(1L).reason());
+    }
+
 }
