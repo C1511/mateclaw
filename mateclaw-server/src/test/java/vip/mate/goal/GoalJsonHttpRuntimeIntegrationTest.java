@@ -77,7 +77,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
-        "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
+        "false,scheduled,true", "true,scheduled,true", "false,scheduled-queued,true", "true,scheduled-queued,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
         "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true",
         "false,supervised,true", "true,supervised,true", "false,supervised-recovered,true", "true,supervised-recovered,true",
@@ -591,7 +591,17 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 runner.cancel(goal.getId());
             }
         } else if (scheduled) {
+            Long queuedInputId = null;
+            if (entry.equals("scheduled-queued")) {
+                var queuedInput = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, json).enqueue(
+                        conversation, agentId, username, message, List.of(), userId, goal.getId(),
+                        java.time.LocalDateTime.now());
+                queuedInputId = queuedInput.id();
+                assertEquals(goal.getId(), queuedInput.selectedGoalId());
+            }
             SegmentOutcome outcome = runner.run(run, message, recovered);
+            if (queuedInputId != null) assertEquals("consumed", jdbc.queryForObject(
+                    "SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queuedInputId));
             assertEquals(accepted ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus(), outcome.toString());
             if (!accepted) assertInstanceOf(SegmentOutcome.Retry.class, outcome, "Runner must consume the actual rejected-completion event");
             var savedAttempt = attempts.get(run.attempt().id());

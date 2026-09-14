@@ -15,6 +15,7 @@ class GoalJsonExternalApprovalIntegrationTest extends GoalJsonHttpRuntimeIntegra
     @Override
     @ParameterizedTest
     @CsvSource({"false,approval,true", "true,approval,true",
+            "false,scheduled-queued,true", "true,scheduled-queued,true",
             "false,terminal-approval,true", "true,terminal-approval,true",
             "false,legacy-terminal-approval,true", "true,legacy-terminal-approval,true",
             "false,originless-terminal-approval,true", "true,originless-terminal-approval,true",

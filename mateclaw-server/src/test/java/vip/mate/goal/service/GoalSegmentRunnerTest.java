@@ -61,7 +61,8 @@ class GoalSegmentRunnerTest {
             if(input==null) return java.util.Optional.empty();
             return java.util.Optional.of(new ConversationInputQueueStore.QueuedInput(input.id(),input.conversationId(),
                     input.agentId(),input.createdBy(),input.message(),input.contentParts(),"claimed",
-                    inv.getArgument(1),input.persistedMessageId(),null,input.createdAt(),LocalDateTime.now()));
+                    inv.getArgument(1),input.persistedMessageId(),null,input.createdAt(),LocalDateTime.now(),
+                    input.requesterUserId(),input.selectedGoalId()));
         });
         when(inputQueue.bindMessage(anyLong(),anyString(),anyLong(),any())).thenReturn(true);
         when(inputQueue.consume(anyLong(),anyString(),any())).thenReturn(true);
@@ -117,6 +118,110 @@ class GoalSegmentRunnerTest {
         assertEquals(0,inputQueue.countQueued("conv"));
         verify(agents).chatStructuredStream(eq(2L),eq("new user instruction"),eq("conv"),eq("alice"),isNull(),any());
         verify(conversations).saveMessage("conv","user","new user instruction",null,"queued");
+    }
+
+    @Test void managedGoalDoesNotExecuteQueuedInputSelectedForAnotherGoal() {
+        goal.setJsonAcceptanceRequired(true);
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var now = LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(99L, "conv", 2L, "alice",
+                "instruction for another Goal", List.of(), "queued", null, null, null,
+                now, now, 42L, 999L));
+        when(agents.chatStructuredStream(eq(2L), anyString(), eq("conv"), eq("alice"), isNull(), any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("incorrect execution", null)));
+
+        runner.run(goal, "continue", false);
+
+        verify(agents, never()).chatStructuredStream(any(), any(), any(), any(), any(), any());
+        verify(conversations).saveMessage("conv", "user", "instruction for another Goal", List.of(), "queued");
+        verify(conversations).saveMessage(eq("conv"),eq("assistant"),contains("was not run"),
+                eq(List.of()),eq("completed"));
+        verify(inputQueue).consume(eq(99L), anyString(), any());
+    }
+
+    @Test void managedGoalExecutesCurrentSelectedQueuedInput() {
+        goal.setJsonAcceptanceRequired(true);
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var approvalRuns=mock(GoalApprovalRunService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner,"approvalRuns",approvalRuns);
+        when(approvalRuns.queuedSelectionStillCurrent(any())).thenReturn(true);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(100L,"conv",2L,"alice",
+                "current Goal instruction",List.of(),"queued",null,null,null,
+                now,now,42L,1L));
+        when(agents.chatStructuredStream(eq(2L),anyString(),eq("conv"),eq("alice"),isNull(),any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("output",null),
+                        AgentService.StreamDelta.event("finish_reason",Map.of("reason","normal"))));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents).chatStructuredStream(eq(2L),eq("current Goal instruction"),eq("conv"),
+                eq("alice"),isNull(),any());
+        verify(inputQueue).consume(eq(100L),anyString(),any());
+        verify(approvalRuns).queuedSelectionStillCurrent(argThat(origin ->
+                origin.selectedGoalId().equals(1L) && origin.requesterUserId().equals(42L)));
+    }
+
+    @Test void pausedManagedGoalPreservesSelectedQueuedInputForResume() {
+        goal.setJsonAcceptanceRequired(true);
+        goal.setStatus(vip.mate.goal.model.GoalStatus.PAUSED);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(101L,"conv",2L,"alice",
+                "paused Goal instruction",List.of(),"queued",null,null,null,
+                now,now,42L,1L));
+
+        var outcome=runner.run(goal,"continue",false);
+
+        assertInstanceOf(SegmentOutcome.Cancelled.class,outcome);
+        verify(agents,never()).chatStructuredStream(any(),any(),any(),any(),any(),any());
+        verify(conversations,never()).saveMessage("conv","user","paused Goal instruction",List.of(),"queued");
+        verify(inputQueue,never()).consume(eq(101L),anyString(),any());
+        verify(inputQueue).release(eq(101L),anyString(),any());
+    }
+
+    @Test void rejectedQueuedInputDoesNotBlockFollowingCurrentSelectedInput() {
+        goal.setJsonAcceptanceRequired(true);
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var approvalRuns=mock(GoalApprovalRunService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner,"approvalRuns",approvalRuns);
+        when(approvalRuns.queuedSelectionStillCurrent(any())).thenReturn(true);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(102L,"conv",2L,"alice",
+                "other Goal instruction",List.of(),"queued",null,null,null,
+                now,now,42L,999L));
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(103L,"conv",2L,"alice",
+                "current Goal instruction",List.of(),"queued",null,null,null,
+                now,now,42L,1L));
+        when(agents.chatStructuredStream(eq(2L),anyString(),eq("conv"),eq("alice"),isNull(),any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("output",null),
+                        AgentService.StreamDelta.event("finish_reason",Map.of("reason","normal"))));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents,times(1)).chatStructuredStream(eq(2L),eq("current Goal instruction"),
+                eq("conv"),eq("alice"),isNull(),any());
+        verify(inputQueue).consume(eq(102L),anyString(),any());
+        verify(inputQueue).consume(eq(103L),anyString(),any());
+    }
+
+    @Test void managedGoalDoesNotRunQueueWhenOriginalAccountIsRevoked() {
+        goal.setJsonAcceptanceRequired(true);
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
+        var approvalRuns=mock(GoalApprovalRunService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(runner,"approvalRuns",approvalRuns);
+        when(approvalRuns.queuedSelectionStillCurrent(any())).thenReturn(false);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(104L,"conv",2L,"alice",
+                "revoked account instruction",List.of(),"queued",null,null,null,
+                now,now,42L,1L));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents,never()).chatStructuredStream(any(),any(),any(),any(),any(),any());
+        verify(conversations).saveMessage("conv","user","revoked account instruction",List.of(),"queued");
+        verify(conversations).saveMessage(eq("conv"),eq("assistant"),contains("was not run"),
+                eq(List.of()),eq("completed"));
+        verify(inputQueue).consume(eq(104L),anyString(),any());
     }
 
     @Test void workerCancellationPersistsPartialEvidenceAndReleasesAdmission() throws Exception {
