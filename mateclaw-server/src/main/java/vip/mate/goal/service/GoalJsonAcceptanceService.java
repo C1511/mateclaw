@@ -28,6 +28,15 @@ public class GoalJsonAcceptanceService {
     public record View(boolean required, String status, List<Requirement> requirements) { }
     record GoalScope(long id, String conversationId, long workspaceId, long agentId, String status, boolean required) { }
 
+    /** Keep the HTTP caller's immutable identity locked through the complete managed operation. */
+    @Transactional
+    public <T> T withAuthenticatedUser(Long userId, String username, java.util.function.Function<String, T> operation) {
+        if (userId == null || username == null || username.isBlank()) throw failure(401, "Authenticated account ID required");
+        List<String> names = jdbc.queryForList("SELECT username FROM mate_user WHERE id=? AND enabled=TRUE AND deleted=0 FOR UPDATE", String.class, userId);
+        if (names.size() != 1 || !username.equals(names.getFirst())) throw failure(403, "Authenticated account is no longer current");
+        return operation.apply(names.getFirst());
+    }
+
     @Transactional
     public View get(Long goalId, String username) {
         GoalScope goal = authorizedGoal(goalId, username, true);

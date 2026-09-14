@@ -18,48 +18,51 @@ public class GoalJsonAcceptanceController {
 
     @GetMapping
     public R<GoalJsonAcceptanceService.View> get(@PathVariable Long goalId, Authentication auth) {
-        return R.ok(acceptance.get(goalId, username(auth)));
+        return authenticated(auth, username -> acceptance.get(goalId, username));
     }
 
     @PutMapping("/requirements/{criterionKey}")
     public R<GoalJsonAcceptanceService.Requirement> configure(@PathVariable Long goalId, @PathVariable String criterionKey,
             @RequestBody GoalJsonAcceptanceService.ConfigureRequest request, Authentication auth) {
-        return R.ok(acceptance.configure(goalId, criterionKey, request, username(auth)));
+        return authenticated(auth, username -> acceptance.configure(goalId, criterionKey, request, username));
     }
 
     @GetMapping("/artifacts")
     public R<java.util.List<ManagedGoalJsonService.Slot>> artifacts(@PathVariable Long goalId, Authentication auth) {
-        return R.ok(artifacts.list(goalId, username(auth)));
+        return authenticated(auth, username -> artifacts.list(goalId, username));
     }
 
     @PostMapping("/artifacts/{slot}")
     public R<ManagedGoalJsonService.Artifact> publish(@PathVariable Long goalId, @PathVariable String slot,
             @RequestBody ManagedGoalJsonService.PublishRequest request, Authentication auth) {
-        return R.ok(artifacts.publish(goalId, slot, request, username(auth)));
+        return authenticated(auth, username -> artifacts.publish(goalId, slot, request, username));
     }
 
     @GetMapping("/artifacts/versions/{artifactId}")
     public R<ManagedGoalJsonService.Content> version(@PathVariable Long goalId, @PathVariable String artifactId, Authentication auth) {
-        return R.ok(artifacts.read(goalId, artifactId, username(auth)));
+        return authenticated(auth, username -> artifacts.read(goalId, artifactId, username));
     }
 
     @GetMapping("/snapshot")
     public R<vip.mate.goal.service.GoalJsonBindingService.Snapshot> snapshot(@PathVariable Long goalId, Authentication auth) {
-        return R.ok(bindings.snapshot(goalId, username(auth)));
+        return authenticated(auth, username -> bindings.snapshot(goalId, username));
     }
 
     @GetMapping("/checks")
     public R<java.util.List<vip.mate.goal.service.GoalJsonBindingService.State>> checks(@PathVariable Long goalId, Authentication auth) {
-        return R.ok(bindings.state(goalId, username(auth)));
+        return authenticated(auth, username -> bindings.state(goalId, username));
     }
 
     @PostMapping("/checks/{criterionKey}")
     public R<vip.mate.goal.service.GoalJsonBindingService.Check> check(@PathVariable Long goalId, @PathVariable String criterionKey,
             @RequestBody vip.mate.goal.service.GoalJsonBindingService.CheckRequest request, Authentication auth) {
-        return R.ok(bindings.check(goalId, criterionKey, request, username(auth)));
+        return authenticated(auth, username -> bindings.check(goalId, criterionKey, request, username));
     }
 
-    private static String username(Authentication auth) {
-        return auth != null && auth.isAuthenticated() ? auth.getName() : null;
+    private <T> R<T> authenticated(Authentication auth, java.util.function.Function<String, T> operation) {
+        if (auth == null || !auth.isAuthenticated() || !(auth.getDetails() instanceof Long userId)) {
+            throw new vip.mate.exception.MateClawException(401, "Authenticated account ID required");
+        }
+        return R.ok(acceptance.withAuthenticatedUser(userId, auth.getName(), operation));
     }
 }

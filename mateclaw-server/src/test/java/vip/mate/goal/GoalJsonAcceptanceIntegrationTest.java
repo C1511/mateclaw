@@ -35,6 +35,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @MockBean private MemoryManager memory;
     @Autowired private GoalService goals;
     @Autowired private GoalJsonAcceptanceService acceptance;
+    @Autowired private vip.mate.goal.controller.GoalJsonAcceptanceController jsonController;
     @Autowired private vip.mate.goal.service.ManagedGoalJsonService artifacts;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager transactions;
@@ -95,6 +96,37 @@ class GoalJsonAcceptanceIntegrationTest {
         assertTrue(second.getFirst().isJsonAcceptanceRequired());
         assertTrue(goals.listByConversation(paused.getConversationId(), paused.getId(), 20).isEmpty());
         assertNull(goals.findActiveByConversation(paused.getConversationId()), "History must not revive an inactive goal");
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"reassigned", "missing"})
+    void managedHttpBoundaryRechecksTheAuthenticatedAccountInsideItsTransaction(String kind) {
+        GoalEntity goal = goal(false);
+        Long originalId = jdbc.queryForObject("SELECT id FROM mate_user WHERE username=?", Long.class, alice);
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(alice, null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER")));
+        auth.setDetails(originalId);
+        jsonController.configure(goal.getId(), "r", request(0, "summary"), auth);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":false}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        if (kind.equals("reassigned")) {
+            // An in-flight request passed authentication before the account was replaced.
+            jdbc.update("UPDATE mate_user SET username=?,deleted=1,enabled=FALSE WHERE id=?", "retired-" + originalId, originalId);
+            jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (?,?,?,TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)",
+                    IdWorker.getId(), alice, "unused-test-password");
+        } else auth.setDetails(null);
+        assertAll(
+                () -> assertThrows(MateClawException.class, () -> jsonController.get(goal.getId(), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.artifacts(goal.getId(), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.version(goal.getId(), version.artifactId(), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.snapshot(goal.getId(), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.checks(goal.getId(), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.check(goal.getId(), "r", checkRequest(1, version), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.configure(goal.getId(), "r", request(1, "summary"), auth)),
+                () -> assertThrows(MateClawException.class, () -> jsonController.publish(goal.getId(), "report", publication(1, "{\"summary\":0}"), auth)));
+        assertEquals(1, bindings.snapshot(goal.getId(), alice).versionCount());
+        assertEquals(1, acceptance.get(goal.getId(), alice).requirements().getFirst().revision());
+        auth.setDetails(jdbc.queryForObject("SELECT id FROM mate_user WHERE username=? AND deleted=0", Long.class, alice));
+        assertTrue(jsonController.get(goal.getId(), auth).getData().required());
     }
 
     @Test void ownerCanPersistAndReviseRequirementsWithoutAcceptingAStaleEdit() {
