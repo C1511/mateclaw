@@ -38,7 +38,7 @@ public class GoalApprovalRunService {
     public ChatOrigin captureSelectedGoal(ChatOrigin origin) {
         if (origin == null || origin.cronOrigin() || origin.requesterUserId() == null
                 || origin.conversationId() == null || origin.agentId() == null || origin.workspaceId() == null
-                || origin.selectedGoalId() != null
+                || (origin.selectedGoalId() != null && origin.selectedGoalId() > 0)
                 || (origin.executionAttribution() != null
                     && origin.executionAttribution().goalAttemptId() != null)) return origin;
         var selected = jdbc.queryForList("""

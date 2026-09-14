@@ -92,12 +92,14 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,reassigned-approval,true", "true,reassigned-approval,true",
         "false,terminal-approval,true", "true,terminal-approval,true",
         "false,legacy-terminal-approval,true", "true,legacy-terminal-approval,true",
-        "false,originless-terminal-approval,true", "true,originless-terminal-approval,true"})
+        "false,originless-terminal-approval,true", "true,originless-terminal-approval,true",
+        "false,late-terminal-approval,true", "true,late-terminal-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean approval = entry.endsWith("approval");
         boolean doubleApproval = entry.equals("scheduled-double-approval");
         boolean reassigned = entry.contains("reassigned");
         boolean terminal = entry.contains("terminal-");
+        boolean lateTerminal = entry.startsWith("late-");
         boolean detached = entry.contains("detached");
         boolean foreign = entry.contains("foreign");
         boolean supervised = entry.startsWith("supervised");
@@ -285,8 +287,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
         var firstSubscribed = new java.util.concurrent.CountDownLatch(1);
         var initialResponse = reactor.core.publisher.Sinks.<ChatResponse>one();
         var firstStream = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var firstInvocation = new java.util.concurrent.atomic.AtomicReference<org.mockito.invocation.InvocationOnMock>();
         when(model.stream(any(Prompt.class))).thenAnswer(invocation -> {
-            if (queued && firstStream.compareAndSet(true, false)) {
+            if ((queued || lateTerminal) && firstStream.compareAndSet(true, false)) {
+                firstInvocation.set(invocation);
                 return initialResponse.asMono().flux().doOnSubscribe(subscription -> firstSubscribed.countDown());
             }
             return Flux.just(script.answer(invocation));
@@ -321,6 +325,22 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     assertTrue(coordinator.settle(run, outcome, java.time.LocalDateTime.now()));
                     assertEquals("waiting_approval", continuations.get(goal.getId()).state());
                     waiting = outcome.toString();
+                } else if (lateTerminal) {
+                    String inFlightToken = token;
+                    var inFlight = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return requestBody("POST", "/api/v1/chat/stream", inFlightToken,
+                                    Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
+                        } catch (Exception failure) {
+                            throw new java.util.concurrent.CompletionException(failure);
+                        }
+                    });
+                    assertTrue(firstSubscribed.await(10, java.util.concurrent.TimeUnit.SECONDS));
+                    goals.abandon(goal.getId(), username);
+                    assertEquals(GoalStatus.ABANDONED, goals.getById(goal.getId()).getStatus());
+                    assertEquals(reactor.core.publisher.Sinks.EmitResult.OK,
+                            initialResponse.tryEmitValue(model.call((Prompt) firstInvocation.get().getArgument(0))));
+                    waiting = inFlight.get(45, java.util.concurrent.TimeUnit.SECONDS);
                 } else {
                     waiting = requestBody("POST", "/api/v1/chat/stream", token,
                             Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
@@ -329,7 +349,8 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 assertEquals(1, pending.size(), waiting);
                 String pendingId = pending.get(0).path("pendingId").asText();
                 assertEquals("getManagedGoalJsonSlots", pending.get(0).path("toolName").asText());
-                assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+                assertEquals(lateTerminal ? GoalStatus.ABANDONED : GoalStatus.ACTIVE,
+                        goals.getById(goal.getId()).getStatus());
                 assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
                 String persistedOrigin = jdbc.queryForObject("SELECT chat_origin FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId);
                 assertEquals(conversation, approvals.restoreChatOrigin(persistedOrigin).conversationId());
@@ -342,10 +363,12 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 else {
                     assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
                     assertEquals(goal.getId(), approvals.restoreChatOrigin(persistedOrigin).selectedGoalId());
-                    var approvalReplayOrigin = approvals.restoreChatOrigin(persistedOrigin)
-                            .withSelectedGoalId(null).withApprovalId(pendingId);
-                    assertEquals(goal.getId(), approvalRuns.captureSelectedGoal(approvalReplayOrigin).selectedGoalId(),
-                            "A replayed interactive approval can create another selected approval");
+                    if (!lateTerminal) {
+                        var approvalReplayOrigin = approvals.restoreChatOrigin(persistedOrigin)
+                                .withSelectedGoalId(null).withApprovalId(pendingId);
+                        assertEquals(goal.getId(), approvalRuns.captureSelectedGoal(approvalReplayOrigin).selectedGoalId(),
+                                "A replayed interactive approval can create another selected approval");
+                    }
                 }
                 Long approvedPlan = plan ? jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation) : null;
                 if (terminal) {
@@ -359,7 +382,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
                         approvals.getPending(pendingId).orElseThrow().setChatOrigin(null);
                         jdbc.update("UPDATE mate_tool_approval SET chat_origin=NULL WHERE pending_id=?", pendingId);
                     }
-                    goals.abandon(goal.getId(), username);
+                    if (!lateTerminal) goals.abandon(goal.getId(), username);
                     assertEquals(GoalStatus.ABANDONED, goals.getById(goal.getId()).getStatus());
                     if (entry.startsWith("legacy-")) {
                         var oldApprovalOrigin = approvals.restoreChatOrigin(

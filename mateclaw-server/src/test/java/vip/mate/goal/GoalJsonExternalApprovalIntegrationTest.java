@@ -17,7 +17,8 @@ class GoalJsonExternalApprovalIntegrationTest extends GoalJsonHttpRuntimeIntegra
     @CsvSource({"false,approval,true", "true,approval,true",
             "false,terminal-approval,true", "true,terminal-approval,true",
             "false,legacy-terminal-approval,true", "true,legacy-terminal-approval,true",
-            "false,originless-terminal-approval,true", "true,originless-terminal-approval,true"})
+            "false,originless-terminal-approval,true", "true,originless-terminal-approval,true",
+            "false,late-terminal-approval,true", "true,late-terminal-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(
             boolean plan, String entry, boolean accepted) throws Exception {
         super.authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(plan, entry, accepted);

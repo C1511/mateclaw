@@ -595,6 +595,19 @@ public class ChatController {
                 ? (regenerateSeed.content() != null ? regenerateSeed.content() : "")
                 : requestMessage;
 
+        // Snapshot selection on the request thread before the executor can be
+        // delayed behind other work. A Goal abandoned during model inference
+        // must still be recognizable when that turn asks for approval.
+        final vip.mate.agent.context.ChatOrigin selectedTurnOrigin;
+        try {
+            selectedTurnOrigin = captureWebGoal(memoryOrigin(conversationId, username,
+                    requesterUserIdOf(auth), workspaceId, request.getEndUserId())
+                    .withBaseUrl(requestBaseUrl), agentId);
+        } catch (vip.mate.exception.MateClawException invalidSelection) {
+            sendErrorDoneAndComplete(emitter, invalidSelection.getMessage());
+            return emitter;
+        }
+
         // ---- 正常请求：注册流状态并附着首个订阅者 ----
         streamTracker.register(conversationId);
         setupPermit.close();
@@ -656,10 +669,7 @@ public class ChatController {
                 // RFC-063r §2.5: web entry — null channelId / no ChannelTarget;
                 // tools that need a workspace path read it from the agent (origin
                 // is enriched with workspaceBasePath in StateGraph buildInitialState).
-                vip.mate.agent.context.ChatOrigin webOrigin =
-                        memoryOrigin(conversationId, username, requesterUserIdOf(auth), workspaceId, request.getEndUserId())
-                                .withBaseUrl(requestBaseUrl)
-                                .withOriginMessageId(originMessageId);
+                vip.mate.agent.context.ChatOrigin webOrigin = selectedTurnOrigin.withOriginMessageId(originMessageId);
                 Disposable disposable = agentService.chatStructuredStream(agentId, promptText, conversationId, username, request.getThinkingLevel(), webOrigin)
                         .doOnNext(delta -> {
                             if (emitterDone.get()) return;
@@ -1185,9 +1195,9 @@ public class ChatController {
         String promptText = buildPromptText(request.getMessage(), request.getContentParts());
         // Carry the web origin so per-owner memory recall (read) and the
         // post-conversation memory write below agree on the same owner key.
-        vip.mate.agent.context.ChatOrigin webOrigin =
+        vip.mate.agent.context.ChatOrigin webOrigin = captureWebGoal(
                 memoryOrigin(request.getConversationId(), username, requesterUserIdOf(auth), workspaceId,
-                        request.getEndUserId()).withOriginMessageId(
+                        request.getEndUserId()), agentId).withOriginMessageId(
                                 savedUser == null ? null : savedUser.getId());
         AgentService.ChatResult result = turnGate.withPermit(permit, () ->
                 agentService.chatWithUsage(agentId, promptText, request.getConversationId(), webOrigin));
@@ -1360,6 +1370,12 @@ public class ChatController {
         // Authenticated web user: carry the immutable id so on-behalf-of identity
         // forwarding can assert "MateClaw authenticated this user" (not an anon id).
         return vip.mate.agent.context.ChatOrigin.web(conversationId, username, workspaceId, null, baseUrl, requesterUserId);
+    }
+
+    private vip.mate.agent.context.ChatOrigin captureWebGoal(
+            vip.mate.agent.context.ChatOrigin origin, Long agentId) {
+        var withAgent = origin.withAgent(agentId);
+        return goalApprovalRuns == null ? withAgent : goalApprovalRuns.captureSelectedGoal(withAgent);
     }
 
     /** Hold the selected Goal's approver identity through the approval write. */
@@ -1579,8 +1595,8 @@ public class ChatController {
         vip.mate.agent.context.ChatOrigin queuedOrigin =
                 vip.mate.agent.context.ChatOrigin.web(conversationId, preConsumedInput.createdBy(),
                                 queuedConversation.getWorkspaceId(), null, baseUrl, preConsumedInput.requesterUserId())
-                        .withAgent(agentId)
                         .withOriginMessageId(queuedOriginMessageId);
+        queuedOrigin = captureWebGoal(queuedOrigin, agentId);
         Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, preConsumedInput.createdBy(), null, queuedOrigin)
                 .doOnNext(delta -> {
                     if (emitterDone.get()) return;
