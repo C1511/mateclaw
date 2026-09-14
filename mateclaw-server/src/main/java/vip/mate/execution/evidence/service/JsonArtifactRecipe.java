@@ -39,12 +39,23 @@ public final class JsonArtifactRecipe {
                 Instant.now(), false);
     }
 
+    /** Shared strict parser for managed publication and diagnostic checks. */
+    public static com.fasterxml.jackson.databind.JsonNode parseObject(byte[] bytes) {
+        if (bytes == null || bytes.length > 1_048_576) throw new MateClawException(400, "JSON must be at most 1 MiB");
+        try {
+            var document = JSON.readTree(bytes);
+            if (document == null || !document.isObject()) throw new IllegalArgumentException();
+            return document;
+        } catch (Exception invalid) {
+            throw new MateClawException(400, "A strict JSON object is required");
+        }
+    }
+
     public static Result check(byte[] bytes, List<String> requestedFields) {
         List<String> fields = validate(requestedFields);
         if (bytes == null || bytes.length > 1_048_576) return outcome("UNKNOWN", fields, List.of());
         try {
-            var document = JSON.readTree(bytes);
-            if (document == null || !document.isObject()) return outcome("INVALID_JSON", fields, List.of());
+            var document = parseObject(bytes);
             List<String> missing = fields.stream().filter(field -> !document.hasNonNull(field)).toList();
             return outcome(missing.isEmpty() ? "MATCH" : "MISSING_FIELDS", fields, missing);
         } catch (Exception invalid) {

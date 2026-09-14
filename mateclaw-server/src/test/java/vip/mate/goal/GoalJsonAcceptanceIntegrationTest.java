@@ -35,6 +35,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @MockBean private MemoryManager memory;
     @Autowired private GoalService goals;
     @Autowired private GoalJsonAcceptanceService acceptance;
+    @Autowired private vip.mate.goal.service.ManagedGoalJsonService artifacts;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager transactions;
     private String alice;
@@ -153,4 +154,101 @@ class GoalJsonAcceptanceIntegrationTest {
         assertThrows(MateClawException.class, () -> acceptance.configure(goal.getId(), "overflow", request(0, "summary"), alice));
         assertEquals(8, acceptance.get(goal.getId(), alice).requirements().size());
     }
+    private vip.mate.goal.service.ManagedGoalJsonService.PublishRequest publication(long generation, String content) {
+        return new vip.mate.goal.service.ManagedGoalJsonService.PublishRequest(generation, content);
+    }
+
+    @Test void managedVersionsPreserveExactBytesAndRejectStaleOverwriteAndForeignReads() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        assertEquals(0, artifacts.list(goal.getId(), alice).getFirst().generation());
+        String original = "{ \"summary\": false, \"count\": 0 }";
+        var first = artifacts.publish(goal.getId(), "report", publication(0, original), alice);
+        assertEquals(1, first.generation());
+        assertEquals(original, artifacts.read(goal.getId(), first.artifactId(), alice).jsonContent());
+        try {
+            assertEquals(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(original.getBytes(java.nio.charset.StandardCharsets.UTF_8))), first.sha256());
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
+        assertEquals(first, artifacts.read(goal.getId(), first.artifactId(), alice).artifact());
+        assertEquals(86_400, java.time.Duration.between(first.createdAt(), first.expiresAt()).toSeconds());
+        var second = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":\"next\"}"), alice);
+        assertNotEquals(first.artifactId(), second.artifactId());
+        assertEquals(second.artifactId(), artifacts.list(goal.getId(), alice).getFirst().current().artifactId());
+        assertEquals(original, artifacts.read(goal.getId(), first.artifactId(), alice).jsonContent());
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice));
+        assertThrows(MateClawException.class, () -> artifacts.read(goal.getId(), first.artifactId(), bob));
+        assertThrows(MateClawException.class, () -> artifacts.read(goal(false).getId(), first.artifactId(), alice));
+    }
+
+    @Test void managedPublicationRejectsInvalidObjectsAndUnrequiredSlotsWithoutCreatingVersions() {
+        GoalEntity goal = goal(false);
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(0, "{}"), alice));
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        for (String invalid : List.of("[]", "null", "{\"a\":1,\"a\":2}", "{} {}", "[".repeat(33)+"]".repeat(33), "{\"a\":\""+"中".repeat(350000)+"\"}")) {
+            assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(0, invalid), alice));
+        }
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "other", publication(0, "{}"), alice));
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(0, "{}"), bob));
+        assertEquals(0, artifacts.list(goal.getId(), alice).getFirst().generation());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+    }
+
+    @Test void managedPublicationRollsBackBodyPointerAndGoalVersionTogether() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = goals.getById(goal.getId()).getVersion();
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            artifacts.publish(goal.getId(), "report", publication(0, "{}"), alice);
+            status.setRollbackOnly();
+        });
+        assertEquals(version, goals.getById(goal.getId()).getVersion());
+        assertEquals(0, artifacts.list(goal.getId(), alice).getFirst().generation());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+    }
+
+    @Test void competingPublishersHaveExactlyOneCurrentGeneration() throws Exception {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            java.util.concurrent.Callable<Boolean> publish = () -> {
+                start.await();
+                try { artifacts.publish(goal.getId(), "report", publication(0, "{}"), alice); return true; }
+                catch (MateClawException conflict) {
+                    assertTrue(conflict.getMessage().contains("generation changed"));
+                    return false;
+                }
+            };
+            var first = workers.submit(publish); var second = workers.submit(publish); start.countDown();
+            assertNotEquals(first.get(10, java.util.concurrent.TimeUnit.SECONDS), second.get(10, java.util.concurrent.TimeUnit.SECONDS));
+        }
+        assertEquals(1, artifacts.list(goal.getId(), alice).getFirst().generation());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+    }
+
+    @Test void quotaAndTerminalStateNeverReuseOrMutateOldVersions() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var first = artifacts.publish(goal.getId(), "report", publication(0, "{}"), alice);
+        for (int i=1; i<32; i++) artifacts.publish(goal.getId(), "report", publication(i, "{}"), alice);
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(32, "{}"), alice));
+        assertEquals(32, artifacts.list(goal.getId(), alice).getFirst().generation());
+        assertEquals("{}", artifacts.read(goal.getId(), first.artifactId(), alice).jsonContent());
+        jdbc.update("UPDATE mate_agent_goal SET status='abandoned' WHERE id=?", goal.getId());
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(32, "{}"), alice));
+    }
+
+    @Test void managedJsonAboveSmallTextCapacityRemainsExactAndDisabledOwnerLosesAccess() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        String content = "{\"summary\":\"" + "中".repeat(30_000) + "\"}";
+        var stored = artifacts.publish(goal.getId(), "report", publication(0, content), alice);
+        assertTrue(stored.byteLength() > 65_535);
+        assertEquals(content, artifacts.read(goal.getId(), stored.artifactId(), alice).jsonContent());
+        jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
+        assertThrows(MateClawException.class, () -> artifacts.read(goal.getId(), stored.artifactId(), alice));
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice));
+    }
+
 }

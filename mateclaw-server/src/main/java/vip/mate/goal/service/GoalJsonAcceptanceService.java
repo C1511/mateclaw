@@ -26,7 +26,7 @@ public class GoalJsonAcceptanceService {
     public record Requirement(String criterionKey, String artifactSlot, long revision,
                               List<String> requiredFields, String configuredBy) { }
     public record View(boolean required, List<Requirement> requirements) { }
-    private record GoalScope(long id, String conversationId, long workspaceId, String status, boolean required) { }
+    record GoalScope(long id, String conversationId, long workspaceId, String status, boolean required) { }
 
     @Transactional
     public View get(Long goalId, String username) {
@@ -74,7 +74,7 @@ public class GoalJsonAcceptanceService {
         return new Requirement(criterionKey, request.artifactSlot(), next, fields, username);
     }
 
-    private GoalScope authorizedGoal(Long goalId, String username, boolean lock) {
+    GoalScope authorizedGoal(Long goalId, String username, boolean lock) {
         if (username == null || username.isBlank() || "anonymous".equals(username)) throw failure(401, "Authentication required");
         // Deliberately stricter than legacy system-conversation ownership fallback.
         List<String> roles = jdbc.queryForList("SELECT role FROM mate_user WHERE username=? AND enabled=TRUE AND deleted=0" + (lock ? " FOR UPDATE" : ""), String.class, username);
@@ -98,7 +98,7 @@ public class GoalJsonAcceptanceService {
         return rows.getFirst();
     }
 
-    private List<Requirement> requirements(Long goalId) {
+    List<Requirement> requirements(Long goalId) {
         return jdbc.query("SELECT criterion_key,artifact_slot,revision,required_fields,updated_by FROM mate_goal_json_requirement WHERE goal_id=? ORDER BY criterion_key",
                 (row, i) -> new Requirement(row.getString("criterion_key"), row.getString("artifact_slot"), row.getLong("revision"), decode(row.getString("required_fields")), row.getString("updated_by")), goalId);
     }
