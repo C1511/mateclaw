@@ -67,10 +67,18 @@ public class GoalContinuationStore {
     }
 
     public Continuation get(Long goalId) {
+        return get(goalId, false);
+    }
+
+    Continuation getForUpdate(Long goalId) {
+        return get(goalId, true);
+    }
+
+    private Continuation get(Long goalId, boolean lock) {
         List<Continuation> rows = jdbc.query("""
                 SELECT c.*,g.conversation_id FROM mate_goal_continuation c
                 JOIN mate_agent_goal g ON g.id=c.goal_id WHERE c.goal_id=?
-                """, (rs, row) -> read(rs), goalId);
+                """ + (lock ? " FOR UPDATE" : ""), (rs, row) -> read(rs), goalId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
@@ -81,7 +89,7 @@ public class GoalContinuationStore {
     boolean claim(Long goalId, String token, LocalDateTime now, LocalDateTime until, long nowEpoch, long untilEpoch) {
         return jdbc.update("""
                 UPDATE mate_goal_continuation SET state='running',lease_owner=?,lease_until=?,lease_until_epoch_second=?,updated_at=?,
-                wake_requested=FALSE,revision=revision+1
+                wake_requested=FALSE,waiting_approval_attempt_id=NULL,revision=revision+1
                 WHERE goal_id=? AND
                 ((state IN ('queued','retry') AND next_run_at<=?)
                  OR (state='running' AND lease_until_epoch_second<=?))
@@ -94,6 +102,17 @@ public class GoalContinuationStore {
                 UPDATE mate_goal_continuation SET lease_until=?,lease_until_epoch_second=?
                 WHERE goal_id=? AND lease_owner=? AND state='running'
                 """, until, GoalLeaseTime.epoch(until), goalId, token) == 1;
+    }
+
+    boolean claimApproval(Long goalId, String parentAttemptId, String token, LocalDateTime now, long untilEpoch) {
+        return jdbc.update("""
+                UPDATE mate_goal_continuation SET state='running',lease_owner=?,lease_until=?,
+                lease_until_epoch_second=?,updated_at=?,wake_requested=FALSE,
+                waiting_approval_attempt_id=NULL,revision=revision+1
+                WHERE goal_id=? AND state='waiting_approval' AND waiting_approval_attempt_id=?
+                AND current_attempt_id IS NULL AND lease_owner IS NULL
+                AND EXISTS(SELECT 1 FROM mate_agent_goal g WHERE g.id=goal_id AND
+                """ + ELIGIBLE + ")", token, GoalLeaseTime.local(untilEpoch), untilEpoch, now, goalId, parentAttemptId) == 1;
     }
 
     public boolean bindAttempt(Long goalId, String token, String attemptId, long expectedRevision) {
@@ -130,9 +149,10 @@ public class GoalContinuationStore {
                 UPDATE mate_goal_continuation
                 SET state=CASE WHEN ?='waiting_approval' AND wake_requested=TRUE THEN 'queued' ELSE ? END,
                 next_run_at=?,failures=?,reason=?,wake_requested=FALSE,lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,
+                waiting_approval_attempt_id=CASE WHEN ?='waiting_approval' THEN current_attempt_id ELSE NULL END,
                 current_attempt_id=NULL,revision=revision+1,updated_at=?
                 WHERE goal_id=? AND lease_owner=? AND current_attempt_id=? AND revision=? AND state='running'
-                """,state,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,revision)==1;
+                """,state,state,nextRunAt,failures,bounded(reason),state,now,goalId,token,attemptId,revision)==1;
     }
 
     /** Current read under the caller's goal lock, before recovery mutates its attempt. */
@@ -149,7 +169,8 @@ public class GoalContinuationStore {
         return jdbc.update("""
                 UPDATE mate_goal_continuation
                 SET state=?,next_run_at=?,failures=?,reason=?,wake_requested=FALSE,
-                lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,current_attempt_id=NULL,revision=revision+1,updated_at=?
+                lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,current_attempt_id=NULL,
+                waiting_approval_attempt_id=NULL,revision=revision+1,updated_at=?
                 WHERE goal_id=? AND lease_owner=? AND current_attempt_id=? AND state='running'
                 AND lease_until_epoch_second<=?
                 """,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,expiredEpoch)==1;
@@ -167,7 +188,7 @@ public class GoalContinuationStore {
     public void suspendConversation(String conversationId, String reason) {
         jdbc.update("""
                 UPDATE mate_goal_continuation SET state='paused',reason=?,lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,
-                current_attempt_id=NULL,revision=revision+1,updated_at=?
+                current_attempt_id=NULL,waiting_approval_attempt_id=NULL,revision=revision+1,updated_at=?
                 WHERE goal_id IN (SELECT id FROM mate_agent_goal WHERE conversation_id=?)
                 """, bounded(reason), LocalDateTime.now(), conversationId);
     }
@@ -175,7 +196,8 @@ public class GoalContinuationStore {
     public void resume(Long goalId, LocalDateTime now) {
         jdbc.update("""
                 UPDATE mate_goal_continuation SET state='queued',next_run_at=?,failures=0,reason='resumed',
-                lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,current_attempt_id=NULL,revision=revision+1,updated_at=?
+                lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,current_attempt_id=NULL,
+                waiting_approval_attempt_id=NULL,revision=revision+1,updated_at=?
                 WHERE goal_id=? AND state<>'running'
                 """, now, now, goalId);
     }

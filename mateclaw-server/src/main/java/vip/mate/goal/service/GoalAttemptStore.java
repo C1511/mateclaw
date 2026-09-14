@@ -43,9 +43,17 @@ public class GoalAttemptStore {
     }
 
     public GoalAttempt get(String id) {
+        return get(id, false);
+    }
+
+    GoalAttempt getForUpdate(String id) {
+        return get(id, true);
+    }
+
+    private GoalAttempt get(String id, boolean lock) {
         List<GoalAttempt> rows = jdbc.query("""
                 SELECT * FROM mate_goal_attempt WHERE attempt_id=?
-                """, (rs, row) -> read(rs), id);
+                """ + (lock ? " FOR UPDATE" : ""), (rs, row) -> read(rs), id);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 

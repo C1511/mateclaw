@@ -24,7 +24,8 @@ class GoalContinuationStoreTest {
                 new ClassPathResource("db/migration/h2/V120__agent_goal.sql"),
                 new ClassPathResource("db/migration/h2/V188__goal_continuation.sql"),
                 new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql"),
-                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql")).execute(ds);
+                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql"),
+                new ClassPathResource("db/migration/h2/V200__goal_approval_attempt_handoff.sql")).execute(ds);
         jdbc = new JdbcTemplate(ds);
         store = new GoalContinuationStore(jdbc);
     }

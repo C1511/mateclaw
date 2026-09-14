@@ -68,3 +68,5 @@ JWT requests match the signed userId to the current enabled account ID. Recreati
 After interactive Web approval, Plan execution restores the original plan and approved call, retaining the requester and managed acceptance requirements. Approval itself does not replace a JSON check or complete the goal.
 
 When a background Goal settles into awaiting approval, its original attempt lease is released. Replaying that persisted identity cannot access managed artifacts or complete the Goal. A fresh attempt can reuse still-eligible evidence, but automatic transfer of a settled approval to a new lease is not yet provided; interactive approval verification does not cover this background path.
+
+V200 records the exact attempt that settled into approval waiting and makes the approval-to-new-attempt association unique. Older waiting rows remain unbound and cannot be inferred into new execution authority. The controlled claim service is verified; automatic replay integration and lifecycle verification are still in progress.

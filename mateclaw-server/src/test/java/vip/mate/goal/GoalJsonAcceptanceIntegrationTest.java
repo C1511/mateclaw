@@ -46,6 +46,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private vip.mate.goal.service.GoalRecoveryService recovery;
     @Autowired private vip.mate.goal.service.GoalAttemptStore attempts;
     @Autowired private vip.mate.approval.ApprovalWorkflowService approvals;
+    @Autowired private vip.mate.goal.service.GoalApprovalRunService approvalRuns;
 
     private String alice;
     private String bob;
@@ -744,6 +745,63 @@ class GoalJsonAcceptanceIntegrationTest {
     private GoalEntity runtimeComplete(GoalEntity goal, GoalEvaluationResult evaluation, vip.mate.agent.context.ChatOrigin origin, boolean automatic) {
         return automatic ? goals.markRuntimeEvaluatedCompleted(goal.getId(), evaluation, origin)
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"valid", "pending", "payload", "paused", "running", "legacy", "archived", "agent", "disabled", "wrong-parent"})
+    void consumedApprovalCanClaimOnlyItsExactWaitingGoalOnce(String kind) throws Exception {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var original = claimed(goal);
+        var origin = attemptOrigin(goal, original);
+        String payload = "[{\"name\":\"getManagedGoalJsonSlots\",\"arguments\":\"{}\"}]";
+        String pending;
+        vip.mate.agent.context.ChatOriginHolder.set(origin);
+        try {
+            pending = approvals.createPending(goal.getConversationId(), alice, "getManagedGoalJsonSlots", "{}",
+                    "offline exact handoff fixture", payload, null, "1");
+        } finally { vip.mate.agent.context.ChatOriginHolder.clear(); }
+        if (!kind.equals("running")) assertTrue(coordinator.settle(original,
+                new SegmentOutcome.AwaitApproval("approval_required"), java.time.LocalDateTime.now()));
+        if (!kind.equals("pending")) assertNotNull(approvals.resolveAndConsume(pending, alice).consumedSnapshot());
+        if (kind.equals("paused")) goals.pause(goal.getId(), alice);
+        if (kind.equals("legacy")) jdbc.update("UPDATE mate_goal_continuation SET waiting_approval_attempt_id=NULL WHERE goal_id=?", goal.getId());
+        if (kind.equals("wrong-parent")) jdbc.update("UPDATE mate_goal_continuation SET waiting_approval_attempt_id=? WHERE goal_id=?", UUID.randomUUID().toString(), goal.getId());
+        if (kind.equals("archived")) jdbc.update("UPDATE mate_conversation SET archived=1 WHERE conversation_id=?", goal.getConversationId());
+        if (kind.equals("agent")) jdbc.update("UPDATE mate_conversation SET agent_id=99 WHERE conversation_id=?", goal.getConversationId());
+        if (kind.equals("disabled")) jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
+        var replay = origin.withApprovalId(pending);
+        if (!kind.equals("valid")) {
+            assertThrows(MateClawException.class, () -> approvalRuns.claim(replay, kind.equals("payload") ? "[]" : payload));
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_attempt WHERE goal_id=?", Integer.class, goal.getId()),
+                    "Rejected or late-scope-invalid handoff must roll back the new attempt");
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_attempt WHERE approval_pending_id=?", Integer.class, pending));
+            return;
+        }
+        // Competing deliveries of one already-consumed approval must produce exactly one new owner.
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.Callable<vip.mate.goal.service.GoalApprovalRunService.ReplayRun> invoke = () -> {
+                start.await();
+                try { return approvalRuns.claim(replay, payload); }
+                catch (MateClawException rejected) { return null; }
+            };
+            var first = pool.submit(invoke); var second = pool.submit(invoke); start.countDown();
+            var a = first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            var b = second.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertNotEquals(a == null, b == null, "Exactly one delivery acquires the new owner");
+            var fresh = a != null ? a : b;
+            assertEquals(original.attempt().id(), fresh.run().attempt().parentAttemptId());
+            assertNotEquals(original.attempt().leaseToken(), fresh.run().attempt().leaseToken());
+            assertEquals(pending, fresh.origin().executionAttribution().approvalId());
+            assertTrue(coordinator.renew(fresh.run(), java.time.LocalDateTime.now()));
+            assertThrows(MateClawException.class, () -> bindings.snapshotForRuntime(replay));
+            var version = artifacts.publishForRuntime(fresh.origin(), "report", publication(0, "{\"summary\":false}"));
+            assertEquals("goal-attempt", version.producerKind());
+            assertTrue(bindings.checkForRuntime(fresh.origin(), "r", checkRequest(1, version)).acceptanceEligible());
+            assertTrue(coordinator.settle(fresh.run(), new SegmentOutcome.Continue("approval_fixture_done"), java.time.LocalDateTime.now()));
+            assertThrows(MateClawException.class, () -> approvalRuns.claim(replay, payload));
+            assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_attempt WHERE goal_id=?", Integer.class, goal.getId()));
+        }
     }
 
     @ParameterizedTest @ValueSource(booleans = {false, true})
