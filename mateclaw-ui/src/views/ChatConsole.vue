@@ -76,11 +76,8 @@
           <div v-else class="no-agent-hint">{{ $t('chat.selectAgent') }}</div>
         </div>
         <div class="chat-header-right">
-          <button v-if="currentConversationGoal" class="header-btn" type="button"
-            :title="$t('plans.goals')" :aria-label="$t('plans.goals')"
-            :aria-expanded="conversationGoalOpen" @click="conversationGoalOpen = true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-          </button>
+          <ConversationGoalsControl v-if="currentConversationId && !isEphemeralConversation(currentConversationId)"
+            :key="currentConversationId" :conversation-id="currentConversationId" />
           <!-- Model selector — Issue #81 v2 R3: always pass full providers + show-all-states
                so unhealthy rows render as dimmed entries with status chips and a Fix
                button instead of disappearing entirely. -->
@@ -115,10 +112,6 @@
           </div>
         </div>
       </div>
-
-      <GoalsPanel v-if="currentConversationGoal && conversationGoalOpen" :key="currentConversationGoal.id"
-        :open="conversationGoalOpen" :goals="[currentConversationGoal]" :loading="false"
-        @close="conversationGoalOpen = false" />
 
       <TeamWorkerBanner
         v-if="workerRunContext"
@@ -360,7 +353,7 @@ import { buildViewerModelProviders } from '@/utils/viewerModelProviders'
 import GoalSetInlinePrompt from '@/components/goal/GoalSetInlinePrompt.vue'
 import GoalSystemLine from '@/components/goal/GoalSystemLine.vue'
 
-const GoalsPanel = defineAsyncComponent(() => import('@/components/agents/GoalsPanel.vue'))
+const ConversationGoalsControl = defineAsyncComponent(() => import('@/components/goal/ConversationGoalsControl.vue'))
 
 // ============ Talk Mode ============
 const showTalkMode = ref(false)
@@ -1403,11 +1396,6 @@ watch([selectedAgentId, currentConversationId], () => {
 // avatar ring listens on goalStore.activeGoalByConv[cid]; without this
 // fetch the ring would only appear after an SSE event mutated the store.
 const goalStore = useGoalStore()
-const conversationGoalOpen = ref(false)
-const currentConversationGoal = computed(() => currentConversationId.value
-  ? goalStore.activeGoal(currentConversationId.value) : null)
-watch(() => currentConversationGoal.value?.id, () => { conversationGoalOpen.value = false })
-watch(currentConversationId, () => { conversationGoalOpen.value = false })
 const workspaceStore = useWorkspaceStore()
 const currentWorkspaceId = computed(() => workspaceStore.currentWorkspaceId ?? '1')
 const canConfigureModels = computed(() => workspaceStore.isGlobalAdmin)

@@ -38,6 +38,9 @@ export default {
     }
 },
   goalJsonAcceptance: {
+    historyLoadFailed: 'Could not load this conversation’s goals. Reload after checking your access.',
+    historyLoadMore: 'Load older goals',
+    historyStatus: { active: 'Active', paused: 'Paused', completed: 'Completed', exhausted: 'Budget exhausted', abandoned: 'Abandoned' },
     "title": "Managed JSON acceptance",
     "scope": "Require the listed top-level fields in a platform-managed JSON object, with values other than null (false, zero and empty strings are allowed). Text claims and ordinary file checks cannot satisfy this requirement.",
     "refresh": "Reload requirements",

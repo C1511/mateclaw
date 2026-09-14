@@ -41,6 +41,9 @@ public interface GoalService {
     /** Paged list filtered by status / owner. */
     List<GoalEntity> list(String status, String username, int limit);
 
+    /** Conversation-scoped history, newest id first, with an exclusive cursor. */
+    List<GoalEntity> listByConversation(String conversationId, Long beforeId, int limit);
+
     /** Sparse update. Throws if any terminal-state goal is targeted. */
     GoalEntity update(Long id, GoalUpdateRequest req, String username);
 

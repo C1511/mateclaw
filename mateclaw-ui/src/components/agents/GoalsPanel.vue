@@ -13,15 +13,18 @@
           </button>
 
           <div class="gp-head">
-            <h2 class="gp-head__title">{{ t('plans.activeGoals') }}</h2>
+            <h2 class="gp-head__title">{{ title || t('plans.activeGoals') }}</h2>
           </div>
 
-          <div v-if="loading" class="pd-loading">{{ t('common.loading') }}</div>
+          <button v-if="showRefresh" type="button" :disabled="loading" @click="$emit('refresh')">{{ t('common.refresh') }}</button>
+          <p v-if="error" role="alert">{{ error }}</p>
+          <div v-if="loading && !goals.length" class="pd-loading">{{ t('common.loading') }}</div>
           <el-empty v-else-if="!goals.length" :description="t('plans.noGoals')" />
 
           <div v-else class="gp-list">
             <div v-for="goal in goals" :key="goal.id" class="gp-goal">
               <div class="gp-goal__title">{{ cleanGoal(goal.title) }}</div>
+              <p v-if="showRefresh">{{ t('goalJsonAcceptance.historyStatus.' + goal.status) }}</p>
               <p v-if="showDesc(goal)" class="gp-goal__desc">{{ cleanGoal(goal.description) }}</p>
 
               <div class="gp-goal__score" v-if="goal.completionScore != null">
@@ -46,6 +49,7 @@
               <ExecutionEvidenceList v-if="goal.conversationId" :conversation-id="goal.conversationId" :goal-id="goal.id" />
             </div>
           </div>
+          <button v-if="hasMore" type="button" :disabled="loading" @click="$emit('load-more')">{{ t('goalJsonAcceptance.historyLoadMore') }}</button>
         </aside>
       </div>
     </Transition>
@@ -63,9 +67,13 @@ const props = defineProps<{
   open: boolean
   goals: Goal[]
   loading: boolean
+  title?: string
+  error?: string
+  hasMore?: boolean
+  showRefresh?: boolean
 }>()
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; refresh: []; 'load-more': [] }>()
 
 const { t } = useI18n()
 

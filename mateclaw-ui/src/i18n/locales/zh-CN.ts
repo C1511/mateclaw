@@ -38,6 +38,9 @@ export default {
     }
 },
   goalJsonAcceptance: {
+    historyLoadFailed: '无法读取此会话的目标。请确认访问权限后重新读取。',
+    historyLoadMore: '加载更早的目标',
+    historyStatus: { active: '进行中', paused: '已暂停', completed: '已完成', exhausted: '预算耗尽', abandoned: '已放弃' },
     "title": "受管 JSON 验收",
     "scope": "要求平台受管 JSON 对象存在指定顶层字段且值不为 null（允许 false、0 和空字符串）。文本声明和普通文件诊断不能满足这项要求。",
     "refresh": "重新读取要求",

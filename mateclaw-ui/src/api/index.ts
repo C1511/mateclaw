@@ -1844,6 +1844,9 @@ export const goalApi = {
   findActive: (conversationId: string) =>
     http.get<Goal | null>(`/goals/by-conversation/${encId(conversationId)}`),
 
+  history: (conversationId: string, beforeId?: string) =>
+    http.get<Goal[]>(`/goals/by-conversation/${encId(conversationId)}/history`, { params: { beforeId, limit: 20 } }),
+
   get: (id: string) => http.get<Goal>(`/goals/${id}`),
 
   events: (id: string, limit = 100) =>

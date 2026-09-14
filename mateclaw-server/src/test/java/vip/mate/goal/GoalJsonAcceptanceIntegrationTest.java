@@ -71,6 +71,29 @@ class GoalJsonAcceptanceIntegrationTest {
         return new GoalJsonAcceptanceService.ConfigureRequest(revision, "report", List.of(fields));
     }
 
+    @Test void conversationHistoryPreservesPausedAndCompletedGoalsWithExclusivePaging() {
+        GoalEntity paused = goal(false);
+        acceptance.configure(paused.getId(), "r", request(0, "summary"), alice);
+        goals.pause(paused.getId(), alice);
+        GoalCreateRequest next = new GoalCreateRequest();
+        next.setConversationId(paused.getConversationId()); next.setWorkspaceId(1L); next.setAgentId(1L);
+        next.setTitle("Next report"); next.setDescription("History fixture"); next.setPersistentExecution(false);
+        GoalEntity completed = goals.create(next, alice);
+        goals.markCompleted(completed.getId(), null);
+        GoalEntity deleted = goals.create(next, alice);
+        jdbc.update("UPDATE mate_agent_goal SET deleted=1 WHERE id=?", deleted.getId());
+        goal(false); // A newer goal in another conversation must not enter this page.
+        var first = goals.listByConversation(paused.getConversationId(), null, 1);
+        assertEquals(List.of(completed.getId()), first.stream().map(GoalEntity::getId).toList());
+        assertEquals(GoalStatus.COMPLETED, first.getFirst().getStatus());
+        var second = goals.listByConversation(paused.getConversationId(), completed.getId(), 1);
+        assertEquals(List.of(paused.getId()), second.stream().map(GoalEntity::getId).toList());
+        assertEquals(GoalStatus.PAUSED, second.getFirst().getStatus());
+        assertTrue(second.getFirst().isJsonAcceptanceRequired());
+        assertTrue(goals.listByConversation(paused.getConversationId(), paused.getId(), 20).isEmpty());
+        assertNull(goals.findActiveByConversation(paused.getConversationId()), "History must not revive an inactive goal");
+    }
+
     @Test void ownerCanPersistAndReviseRequirementsWithoutAcceptingAStaleEdit() {
         GoalEntity goal = goal(false);
         assertFalse(acceptance.get(goal.getId(), alice).required());
