@@ -74,6 +74,12 @@ public class ChatController {
     @org.springframework.beans.factory.annotation.Autowired
     private ConversationTurnGate turnGate = new ConversationTurnGate();
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private vip.mate.goal.service.GoalJsonAcceptanceService jsonAcceptance;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private vip.mate.goal.service.GoalApprovalRunService goalApprovalRuns;
+
     // Virtual thread per SSE task: matches the app-wide virtual-thread model
     // (spring.threads.virtual.enabled=true) and, unlike a cached platform-thread
     // pool, never reuses a thread across tasks, so no ThreadLocal state can leak
@@ -241,7 +247,13 @@ public class ChatController {
 
             // deny: workflow.resolve handles DB + metadata + memory atomically.
             if (isDenyCommand) {
-                ResolveOutcome denyOutcome = approvalService.resolve(pending.getPendingId(), username, "denied");
+                ResolveOutcome denyOutcome;
+                try {
+                    denyOutcome = resolveWithCurrentApprover(pending, auth, username, false);
+                } catch (vip.mate.exception.MateClawException revoked) {
+                    sendErrorDoneAndComplete(emitter, revoked.getMessage());
+                    return emitter;
+                }
                 conversationService.removeApprovalPlaceholders(conversationId);
                 log.info("[Approval-Stream] User {} denied pending {} for conversation {} (dbSynced={}, msgRewritten={})",
                         username, pending.getPendingId(), conversationId,
@@ -251,7 +263,13 @@ public class ChatController {
             // approve: atomic resolveAndConsume; workflow handles DB + metadata + memory.
             PendingApproval consumed = null;
             if (isApprovalCommand) {
-                ResolveOutcome consumeOutcome = approvalService.resolveAndConsume(pending.getPendingId(), username);
+                ResolveOutcome consumeOutcome;
+                try {
+                    consumeOutcome = resolveWithCurrentApprover(pending, auth, username, true);
+                } catch (vip.mate.exception.MateClawException revoked) {
+                    sendErrorDoneAndComplete(emitter, revoked.getMessage());
+                    return emitter;
+                }
                 if (consumeOutcome.isAlreadyResolved()) {
                     try {
                         sendEvent(emitter, "error", Map.of("message", "审批记录已过期或已被处理"));
@@ -1344,11 +1362,23 @@ public class ChatController {
         return vip.mate.agent.context.ChatOrigin.web(conversationId, username, workspaceId, null, baseUrl, requesterUserId);
     }
 
-    /**
-     * Extract the authenticated user's immutable numeric id from the
-     * {@link Authentication} details (stamped by {@code JwtAuthFilter} for both
-     * the JWT and PAT paths). Null when not authenticated or details absent.
-     */
+    /** Hold the selected Goal's approver identity through the approval write. */
+    private ResolveOutcome resolveWithCurrentApprover(PendingApproval pending, Authentication auth,
+                                                       String username, boolean approve) {
+        if (goalApprovalRuns != null && jsonAcceptance != null) {
+            var origin = approvalService.restoreChatOrigin(pending.getChatOrigin());
+            if (origin != null && goalApprovalRuns.requiresHandoff(origin.withApprovalId(pending.getPendingId()))) {
+                return jsonAcceptance.withAuthenticatedUser(requesterUserIdOf(auth), username,
+                        current -> approve
+                                ? approvalService.resolveAndConsume(pending.getPendingId(), current)
+                                : approvalService.resolve(pending.getPendingId(), current, "denied"));
+            }
+        }
+        return approve ? approvalService.resolveAndConsume(pending.getPendingId(), username)
+                : approvalService.resolve(pending.getPendingId(), username, "denied");
+    }
+
+    /** Extract the immutable account id stamped in Authentication details. */
     private Long requesterUserIdOf(org.springframework.security.core.Authentication auth) {
         if (auth == null) return null;
         Object details = auth.getDetails();

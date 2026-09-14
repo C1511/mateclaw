@@ -40,6 +40,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @MockBean private GoalEvaluationService evaluator;
     @Autowired private GoalContinuationSupervisor supervisor;
     @MockBean private ProviderChatModelFactory modelFactory;
+    @org.springframework.boot.test.mock.mockito.SpyBean private vip.mate.workspace.conversation.ConversationService conversationService;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private vip.mate.config.LoginRateLimitFilter loginLimiter;
     @Autowired private vip.mate.llm.failover.AvailableProviderPool providerPool;
@@ -84,10 +85,12 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,detached-approval,true", "true,detached-approval,true",
         "false,scheduled-detached-approval,true", "true,scheduled-detached-approval,true",
         "false,foreign-approval,true", "true,foreign-approval,true",
-        "false,scheduled-foreign-approval,true", "true,scheduled-foreign-approval,true"})
+        "false,scheduled-foreign-approval,true", "true,scheduled-foreign-approval,true",
+        "false,scheduled-reassigned-approval,true", "true,scheduled-reassigned-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean approval = entry.endsWith("approval");
         boolean doubleApproval = entry.equals("scheduled-double-approval");
+        boolean reassigned = entry.contains("reassigned");
         boolean detached = entry.contains("detached");
         boolean foreign = entry.contains("foreign");
         boolean supervised = entry.startsWith("supervised");
@@ -331,6 +334,32 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 }
                 else assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
                 Long approvedPlan = plan ? jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation) : null;
+                if (reassigned) {
+                    var replaceOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
+                    doAnswer(invocation -> {
+                        if (replaceOnce.compareAndSet(true, false)) {
+                            long replacementId = IdWorker.getId();
+                            jdbc.update("UPDATE mate_user SET username=?,deleted=1,enabled=FALSE WHERE id=?", "retired-" + userId, userId);
+                            jdbc.update("INSERT INTO mate_user(id,username,password,enabled,role,create_time,update_time,deleted) VALUES (?,?,?,TRUE,'user',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", replacementId, username,
+                                    new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder().encode(password));
+                            jdbc.update("INSERT INTO mate_workspace_member(id,workspace_id,user_id,role,create_time,update_time,deleted) VALUES (?,1,?,'member',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", IdWorker.getId(), replacementId);
+                        }
+                        return invocation.callRealMethod();
+                    }).when(conversationService).isConversationOwner(conversation, username);
+                    planApprovalReplay.set(plan);
+                    var oldRequest = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/chat/stream"))
+                            .timeout(Duration.ofSeconds(45)).header("Content-Type", "application/json")
+                            .header("X-Workspace-Id", "1").header("Authorization", "Bearer " + token)
+                            .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("agentId", String.valueOf(agentId),
+                                    "conversationId", conversation, "message", "/approve", "pendingApprovalId", pendingId)))).build();
+                    var rejected = HttpClient.newHttpClient().send(oldRequest, HttpResponse.BodyHandlers.ofString());
+                    assertFalse(replaceOnce.get(), "Replacement must happen after JWT authentication");
+                    assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus(), rejected.body());
+                    assertEquals("PENDING", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId));
+                    assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+                    token = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password)).path("data").path("token").asText();
+                    assertFalse(token.isBlank());
+                }
                 planApprovalReplay.set(plan);
                 String replay = requestBody("POST", "/api/v1/chat/stream", token,
                         Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", "/approve", "pendingApprovalId", pendingId));
@@ -374,9 +403,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 guardRegistry.reload();
             }
         } else if (queued) {
+            String queuedToken = token;
             var response = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                 try {
-                    return requestBody("POST", "/api/v1/chat/stream", token,
+                    return requestBody("POST", "/api/v1/chat/stream", queuedToken,
                         Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", "Wait for a follow-up fixture."));
                 } catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
             });
