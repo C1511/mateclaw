@@ -2,7 +2,7 @@
 
 Expand JSON acceptance requirements in the Goal panel. The conversation owner or an administrator explicitly saves up to eight requirements, each mapping an artifact slot to 1–16 top-level fields. Fields must exist and be non-null; false, zero and empty strings are allowed. This is a presence check, not a quality judgment. Opt-in is durable: requirements can be revised using their current revision, but required mode cannot be disabled. Stale revisions produce a conflict.
 
-The current stage provides user configuration and independent managed version storage. Binding verification is available; the successful strong-completion path is still pending. Selected goals temporarily reject completion without falling back to textual claims. Unselected goals retain existing behavior.
+User configuration, independent managed versions, binding checks and the shared completion gate are connected. Every current requirement needs a matching valid binding before a selected goal can complete under its existing completion rules. Automatic evaluation, explicit completeGoal and retries share that gate. Unselected goals retain existing behavior.
 
 ## Managed version API
 
@@ -29,4 +29,6 @@ Publication and scheduler settlement serialize through the goal lock, rejecting 
 
 After publication, call `POST /checks/{criterionKey}` with `expectedRequirementRevision`, `artifactId` and `expectedGeneration`, or use the agent tool `checkManagedGoalJson` with the same fields. Tool revisions and generations are strings. The server checks the specified current slot version using its own fields recipe; it never accepts a caller-provided PASS. `acceptanceEligible=true` applies to that requirement at the time of checking, not to whole-goal completion.
 
-`GET /checks` reads each requirement's current eligibility. Requirement edits, goal-definition edits, a new slot version, expiry or failed body integrity checks invalidate previous bindings. Recheck the current inputs. Binding and goal-version updates share a transaction; rollback cannot leave a passing credential. Historical diagnostic APIs retain `acceptanceEligible=false`; only managed checks create bindings. Integration with the shared completion entry point is still pending.
+`GET /checks` reads each requirement's current eligibility. Requirement edits, goal-definition edits, a new slot version, expiry or failed body integrity checks invalidate previous bindings. Recheck the current inputs. Binding and goal-version updates share a transaction; rollback cannot leave a passing credential. Historical diagnostic APIs retain `acceptanceEligible=false`; only managed checks create bindings. Completion events retain the accepted requirement revisions, artifact IDs and generations. Transaction rollback emits neither a completion event nor completion memory.
+
+This is an explicit per-goal managed JSON protocol with a limited scope. The broad execution-evidence ledger retains its existing prerequisites for global ENFORCE. Ordinary tool-success text and diagnostic MATCH results never become bindings automatically. Backend services cover success, invalidation, races and rollback; full browser/service flows, restart and external database validation are still in progress.

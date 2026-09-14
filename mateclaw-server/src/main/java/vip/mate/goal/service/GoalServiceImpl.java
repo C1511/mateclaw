@@ -72,6 +72,12 @@ public class GoalServiceImpl implements GoalService {
      * effort: memory should never block the state-machine write.
      */
     private vip.mate.memory.spi.MemoryManager memoryManager;
+    private GoalJsonBindingService jsonBindings;
+
+    @Autowired
+    public void setJsonBindings(GoalJsonBindingService jsonBindings) {
+        this.jsonBindings = jsonBindings;
+    }
 
     public GoalServiceImpl(GoalMapper goalMapper,
                            GoalEventMapper eventMapper,
@@ -390,21 +396,17 @@ public class GoalServiceImpl implements GoalService {
 
     private GoalEntity completeGoal(Long id, GoalEvaluationResult result, boolean evaluated) {
         boolean[] transitioned = {false};
+        var jsonProof = new java.util.concurrent.atomic.AtomicReference<List<GoalJsonBindingService.State>>(List.of());
         GoalEntity g = retryOptimistic(id, "markCompleted", fresh -> {
             // A failed CAS may retry against another worker's completed row.
             transitioned[0] = false;
+            jsonProof.set(List.of());
             if (fresh.getStatus().isTerminal()) {
                 if (evaluated && fresh.getStatus() != GoalStatus.COMPLETED) {
                     throw new MateClawException("err.goal.completion_not_verified", 409,
                             "Automatic completion cannot replace another terminal state");
                 }
                 return null; // idempotent
-            }
-            if (fresh.isJsonAcceptanceRequired()) {
-                // User-selected requirements never fall back to model text or
-                // the legacy explicit-completion path while bindings are absent.
-                throw new MateClawException("err.goal.json_acceptance_required", 409,
-                        "Managed JSON acceptance requires verified current artifact bindings");
             }
             if (evaluated && result.evaluationRevision() != fresh.getEvaluationRevision()) {
                 throw new MateClawException("err.goal.completion_not_verified", 409,
@@ -435,6 +437,11 @@ public class GoalServiceImpl implements GoalService {
                         .toList();
                 w.set(GoalEntity::getCriteria, GoalCriteriaCodec.serialize(allPassed, objectMapper));
             }
+            if (fresh.isJsonAcceptanceRequired()) {
+                if (jsonBindings == null) throw new MateClawException("err.goal.json_acceptance_required", 409,
+                        "Managed JSON verification service is unavailable");
+                jsonProof.set(jsonBindings.requireForCompletion(fresh));
+            }
             bumpVersionAndTime(w);
             transitioned[0] = true;
             return w;
@@ -445,6 +452,10 @@ public class GoalServiceImpl implements GoalService {
         detail.put("agentLlmCallsUsed", g.getAgentLlmCallsUsed());
         detail.put("evalLlmCallsUsed", g.getEvalLlmCallsUsed());
         detail.put("criteria", GoalCriteriaCodec.parse(g.getCriteria(), objectMapper));
+        if (g.isJsonAcceptanceRequired()) {
+            detail.put("jsonAcceptanceRequired", true);
+            detail.put("jsonBindings", jsonProof.get());
+        }
         writeEvent(id, GoalEventType.COMPLETED, null, detail);
         recordAudit("goal.completed", g, detail);
 

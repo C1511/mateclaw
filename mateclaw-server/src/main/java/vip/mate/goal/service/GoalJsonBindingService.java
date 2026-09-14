@@ -112,6 +112,31 @@ public class GoalJsonBindingService {
         }).toList();
     }
 
+    /** Shared completion gate. The held goal lock protects every reference until the status CAS commits. */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public List<State> requireForCompletion(vip.mate.goal.model.GoalEntity expected) {
+        var rows = jdbc.query("""
+                SELECT version,evaluation_revision,json_acceptance_required,status FROM mate_agent_goal
+                WHERE id=? AND deleted=0 FOR UPDATE
+                """, (r, i) -> expected.getVersion() != null && r.getLong("version") == expected.getVersion().longValue()
+                        && r.getLong("evaluation_revision") == expected.getEvaluationRevision()
+                        && r.getBoolean("json_acceptance_required")
+                        && Objects.equals(r.getString("status"), expected.getStatus().getValue()), expected.getId());
+        if (rows.size() != 1 || !rows.getFirst()) throw failure("Goal changed before JSON completion; retry with current state");
+        List<State> states = statesLocked(expected.getId());
+        if (states.isEmpty()) throw failure("Required JSON contracts are unavailable");
+        for (State state : states) {
+            if (!state.acceptanceEligible()) throw failure("JSON requirement " + state.criterionKey() + " is not current: " + state.status());
+        }
+        // Recheck expiry after all recipes have run, immediately before returning to the status CAS.
+        Instant now = Instant.now();
+        for (State state : states) {
+            Binding binding = binding(expected.getId(), state.criterionKey());
+            if (binding == null || !binding.expiresAt().isAfter(now)) throw failure("JSON binding expired before completion");
+        }
+        return states;
+    }
+
     private long evaluationRevision(Long goalId) {
         Long revision = jdbc.queryForObject("SELECT evaluation_revision FROM mate_agent_goal WHERE id=? AND deleted=0 FOR UPDATE", Long.class, goalId);
         if (revision == null) throw failure("Goal definition unavailable");

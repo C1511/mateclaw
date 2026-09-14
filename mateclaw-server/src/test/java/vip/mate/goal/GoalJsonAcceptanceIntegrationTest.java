@@ -442,4 +442,116 @@ class GoalJsonAcceptanceIntegrationTest {
         assertFalse(bindings.state(goal.getId(), alice).getFirst().acceptanceEligible());
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void currentManagedBindingsPermitBothCompletionPaths(boolean persistent, boolean automatic) {
+        GoalEntity goal = goal(persistent);
+        goals.appendCriterion(goal.getId(), "Produce the report", alice);
+        var evaluation = new GoalEvaluationResult(1, "report checked", "completed", true, "fixture", 1, 0,
+                List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture semantic verdict")), null);
+        goals.recordEvaluation(goal.getId(), evaluation, 1, 1);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        GoalEntity completed = assertDoesNotThrow(() -> automatic
+                ? goals.markEvaluatedCompleted(goal.getId(), evaluation) : goals.markCompleted(goal.getId(), evaluation));
+        assertEquals(GoalStatus.COMPLETED, completed.getStatus());
+        assertEquals(1, goals.listEvents(goal.getId(), 30).stream().filter(e -> "completed".equals(e.getEventType())).count());
+        assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), evaluation).getStatus());
+        assertEquals(1, goals.listEvents(goal.getId(), 30).stream().filter(e -> "completed".equals(e.getEventType())).count());
+        assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice));
+    }
+
+    @Test void allCurrentRequirementsMustBindBeforeCompletion() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        acceptance.configure(goal.getId(), "s", new GoalJsonAcceptanceService.ConfigureRequest(0L, "sources", List.of("items")), alice);
+        var report = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, report), alice);
+        assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null));
+        var sources = artifacts.publish(goal.getId(), "sources", publication(0, "{\"items\":[]}"), alice);
+        assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null));
+        bindings.check(goal.getId(), "s", checkRequest(1, sources), alice);
+        assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), null).getStatus());
+        String proof = goals.listEvents(goal.getId(), 30).stream().filter(e -> "completed".equals(e.getEventType())).findFirst().orElseThrow().getDetailJson();
+        assertTrue(proof.contains(report.artifactId())); assertTrue(proof.contains(sources.artifactId()));
+    }
+
+    @Test void completionRejectsEveryInvalidationAndFreshBindingRestoresSuccess() {
+        for (String invalidation : List.of("requirement", "definition", "superseded", "expired", "corrupt")) {
+            GoalEntity goal = goal(false);
+            acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+            var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true,\"sources\":[]}"), alice);
+            bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+            long revision = 1;
+            switch (invalidation) {
+                case "requirement" -> { acceptance.configure(goal.getId(), "r", request(1, "summary", "sources"), alice); revision = 2; }
+                case "definition" -> { GoalUpdateRequest edit = new GoalUpdateRequest(); edit.setDescription("new definition"); goals.update(goal.getId(), edit, alice); }
+                case "superseded" -> version = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":true}"), alice);
+                case "expired" -> jdbc.update("UPDATE mate_goal_json_artifact SET expires_at=? WHERE artifact_id=?", java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(1)), version.artifactId());
+                case "corrupt" -> jdbc.update("UPDATE mate_goal_json_artifact SET json_body='{}' WHERE artifact_id=?", version.artifactId());
+            }
+            assertThrows(MateClawException.class, () -> goals.markCompleted(goal.getId(), null), invalidation);
+            assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+            if (List.of("expired", "corrupt").contains(invalidation)) version = artifacts.publish(goal.getId(), "report", publication(1, "{\"summary\":true}"), alice);
+            bindings.check(goal.getId(), "r", checkRequest(revision, version), alice);
+            assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), null).getStatus());
+        }
+    }
+
+    @Test void completionRollbackPreservesActiveGoalAndDoesNotEmitSuccessOrMemory() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), null).getStatus());
+            status.setRollbackOnly();
+        });
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        assertTrue(goals.listEvents(goal.getId(), 30).stream().noneMatch(e -> "completed".equals(e.getEventType())));
+        org.mockito.Mockito.verify(memory, org.mockito.Mockito.never()).syncAll(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertEquals(GoalStatus.COMPLETED, goals.markCompleted(goal.getId(), null).getStatus());
+    }
+
+    @Test void newPublicationAndCompletionCannotBothWinUsingAnOldBinding() throws Exception {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var publish = workers.submit(() -> {
+                start.await();
+                try { artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice); return true; }
+                catch (MateClawException terminal) { return false; }
+            });
+            var complete = workers.submit(() -> {
+                start.await();
+                try { goals.markCompleted(goal.getId(), null); return true; }
+                catch (MateClawException stale) { return false; }
+            });
+            start.countDown();
+            boolean published = publish.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            boolean completed = complete.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertNotEquals(published, completed);
+            assertEquals(completed ? GoalStatus.COMPLETED : GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+            assertEquals(published ? 2 : 1, artifacts.list(goal.getId(), alice).getFirst().generation());
+        }
+    }
+
+    @Test void actualExplicitCompletionToolCannotBypassBindingsButCanCompleteAfterCheck() {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var properties = new vip.mate.goal.config.GoalProperties(); properties.setEnabled(true);
+        var tool = new vip.mate.tool.builtin.GoalManagementTool(goals, properties, new com.fasterxml.jackson.databind.ObjectMapper(), null);
+        var context = accountOrigin(goal, alice).toToolContext();
+        assertTrue(tool.completeGoal(context).contains("error"));
+        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+        var version = artifacts.publish(goal.getId(), "report", publication(0, "{\"summary\":true}"), alice);
+        bindings.check(goal.getId(), "r", checkRequest(1, version), alice);
+        assertTrue(tool.completeGoal(context).contains("\"status\":\"completed\""));
+        assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus());
+    }
+
 }
