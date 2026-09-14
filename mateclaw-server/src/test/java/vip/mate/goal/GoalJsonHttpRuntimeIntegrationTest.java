@@ -80,10 +80,16 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,supervised,true", "true,supervised,true", "false,supervised-recovered,true", "true,supervised-recovered,true",
         "false,supervised,false", "true,supervised,false", "false,supervised-recovered,false", "true,supervised-recovered,false",
         "false,approval,true", "true,approval,true", "false,scheduled-approval,true", "true,scheduled-approval,true",
-        "false,scheduled-double-approval,true", "true,scheduled-double-approval,true"})
+        "false,scheduled-double-approval,true", "true,scheduled-double-approval,true",
+        "false,detached-approval,true", "true,detached-approval,true",
+        "false,scheduled-detached-approval,true", "true,scheduled-detached-approval,true",
+        "false,foreign-approval,true", "true,foreign-approval,true",
+        "false,scheduled-foreign-approval,true", "true,scheduled-foreign-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean approval = entry.endsWith("approval");
         boolean doubleApproval = entry.equals("scheduled-double-approval");
+        boolean detached = entry.contains("detached");
+        boolean foreign = entry.contains("foreign");
         boolean supervised = entry.startsWith("supervised");
         boolean scheduled = entry.startsWith("scheduled") || entry.equals("recovered") || supervised;
         boolean reuse = entry.equals("reuse");
@@ -180,6 +186,17 @@ class GoalJsonHttpRuntimeIntegrationTest {
                         "{\"needs_planning\":true,\"steps\":[\"Produce, publish, check and complete the managed JSON report\"]}"))));
             }
             if (plan) step--;
+            if (detached && step == 1) {
+                // The graph already captured its origin. A provider/thread boundary must not
+                // require that the original request ThreadLocal still be present at guard time.
+                vip.mate.agent.context.ChatOriginHolder.clear();
+            }
+            if (foreign && step == 1) {
+                vip.mate.agent.context.ChatOriginHolder.set(
+                        vip.mate.agent.context.ChatOrigin.web("foreign-conversation", "foreign-requester", 999L, null, null, -1L)
+                                .withAgent(999L).withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(
+                                        999L, "foreign-attempt", null, null, "foreign-fence")));
+            }
             if (!accepted) {
                 if (step == 0) return new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("")
                     .toolCalls(List.of(new AssistantMessage.ToolCall("read-unbound", "function", "getManagedGoalJsonSlots", "{}"))).build())));
@@ -305,7 +322,13 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
                 assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
                 String persistedOrigin = jdbc.queryForObject("SELECT chat_origin FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId);
-                if (scheduled) assertEquals(run.attempt().id(), approvals.restoreChatOrigin(persistedOrigin).executionAttribution().goalAttemptId());
+                assertEquals(conversation, approvals.restoreChatOrigin(persistedOrigin).conversationId());
+                assertEquals(agentId, approvals.restoreChatOrigin(persistedOrigin).agentId());
+                assertEquals(1L, approvals.restoreChatOrigin(persistedOrigin).workspaceId());
+                if (scheduled) {
+                    assertNotNull(approvals.restoreChatOrigin(persistedOrigin).executionAttribution(), persistedOrigin);
+                    assertEquals(run.attempt().id(), approvals.restoreChatOrigin(persistedOrigin).executionAttribution().goalAttemptId());
+                }
                 else assertEquals(userId, approvals.restoreChatOrigin(persistedOrigin).requesterUserId());
                 Long approvedPlan = plan ? jdbc.queryForObject("SELECT id FROM mate_plan WHERE conversation_id=?", Long.class, conversation) : null;
                 planApprovalReplay.set(plan);

@@ -552,13 +552,18 @@ public class AgentService {
         if (goalApprovalReplay != null && goalApprovalReplay.applies(captured)) {
             return Flux.using(() -> acquireTurn(conversationId), permit ->
                     goalApprovalReplay.replay(captured, toolCallPayload, fresh -> {
+                        ChatOrigin previous = ChatOriginHolder.get();
                         ChatOriginHolder.set(fresh);
-                        return vip.mate.agent.context.GoalContinuationContext.call(true, () ->
-                                invokeWithLifecycleFlux(agentId, userMessage, conversationId,
-                                        (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
-                                                requesterId != null ? requesterId : ""), StreamDelta::content));
-                    }), vip.mate.agent.runtime.ConversationTurnGate.Permit::close)
-                    .doFinally(signal -> ChatOriginHolder.clear());
+                        try {
+                            return vip.mate.agent.context.GoalContinuationContext.call(true, () ->
+                                    invokeWithLifecycleFlux(agentId, userMessage, conversationId,
+                                            (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
+                                                    requesterId != null ? requesterId : ""), StreamDelta::content));
+                        } finally {
+                            if (previous == ChatOrigin.EMPTY) ChatOriginHolder.clear();
+                            else ChatOriginHolder.set(previous);
+                        }
+                    }), vip.mate.agent.runtime.ConversationTurnGate.Permit::close);
         }
         return Flux.defer(() -> {
                     ChatOriginHolder.set(captured);

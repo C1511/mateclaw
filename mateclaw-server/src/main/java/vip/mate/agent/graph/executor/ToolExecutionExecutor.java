@@ -1296,7 +1296,7 @@ public class ToolExecutionExecutor {
                 ToolExecutionGuardHelper.ApprovalRequest approval = ToolExecutionGuardHelper.handleToolApproval(
                         toolCall, toolName, arguments, evaluation,
                         conversationId, agentId, requesterId, approvalService, streamTracker,
-                        events, remaining);
+                        events, remaining, origin);
                 toolGuardService.recordApprovalAudit(guardCtx, evaluation, approval.pendingId(), autoOutcome);
                 return GuardDecision.needsApproval(approval.response(), approval.pendingId());
             }
@@ -1318,7 +1318,7 @@ public class ToolExecutionExecutor {
                 String approvalResponse = ToolExecutionGuardHelper.handleToolApprovalLegacy(
                         toolCall, toolName, arguments, guardResult,
                         conversationId, agentId, requesterId, approvalService, streamTracker,
-                        events, remaining);
+                        events, remaining, origin);
                 // Legacy path never persisted a pendingId to carry here; the value
                 // is unused downstream (only the boolean awaitingApproval is read).
                 return GuardDecision.needsApproval(approvalResponse, null);
