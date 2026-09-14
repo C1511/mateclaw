@@ -1367,11 +1367,18 @@ public class ChatController {
                                                        String username, boolean approve) {
         if (goalApprovalRuns != null && jsonAcceptance != null) {
             var origin = approvalService.restoreChatOrigin(pending.getChatOrigin());
-            if (origin != null && goalApprovalRuns.requiresHandoff(origin.withApprovalId(pending.getPendingId()))) {
-                return jsonAcceptance.withAuthenticatedUser(requesterUserIdOf(auth), username,
-                        current -> approve
-                                ? approvalService.resolveAndConsume(pending.getPendingId(), current)
-                                : approvalService.resolve(pending.getPendingId(), current, "denied"));
+            if (origin != null && goalApprovalRuns.requiresCurrentApprover(origin.withApprovalId(pending.getPendingId()))) {
+                Long currentUserId = requesterUserIdOf(auth);
+                return jsonAcceptance.withAuthenticatedUser(currentUserId, username, current -> {
+                    var attribution = origin.executionAttribution();
+                    if (attribution == null || attribution.goalId() == null) {
+                        if (!java.util.Objects.equals(currentUserId, origin.requesterUserId())) {
+                            throw new vip.mate.exception.MateClawException(403, "Approval belongs to another account");
+                        }
+                    }
+                    return approve ? approvalService.resolveAndConsume(pending.getPendingId(), current)
+                            : approvalService.resolve(pending.getPendingId(), current, "denied");
+                });
             }
         }
         return approve ? approvalService.resolveAndConsume(pending.getPendingId(), username)

@@ -42,6 +42,18 @@ public class GoalApprovalRunService {
         return required.isEmpty() || Boolean.TRUE.equals(required.getFirst());
     }
 
+    /** Selected interactive Goals must retain their original authenticated requester at approval time. */
+    public boolean requiresCurrentApprover(ChatOrigin origin) {
+        if (requiresHandoff(origin)) return true;
+        if (origin == null || origin.conversationId() == null || origin.agentId() == null) return false;
+        Integer selected = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM mate_agent_goal
+                WHERE conversation_id=? AND agent_id=? AND json_acceptance_required=TRUE
+                  AND status IN ('active','paused') AND deleted=0
+                """, Integer.class, origin.conversationId(), origin.agentId());
+        return selected != null && selected > 0;
+    }
+
     @Transactional
     public ReplayRun claim(ChatOrigin requested, String toolCallPayload) {
         ExecutionAttribution link = requested == null ? null : requested.executionAttribution();

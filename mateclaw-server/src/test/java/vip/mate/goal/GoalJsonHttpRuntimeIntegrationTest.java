@@ -86,7 +86,8 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,scheduled-detached-approval,true", "true,scheduled-detached-approval,true",
         "false,foreign-approval,true", "true,foreign-approval,true",
         "false,scheduled-foreign-approval,true", "true,scheduled-foreign-approval,true",
-        "false,scheduled-reassigned-approval,true", "true,scheduled-reassigned-approval,true"})
+        "false,scheduled-reassigned-approval,true", "true,scheduled-reassigned-approval,true",
+        "false,reassigned-approval,true", "true,reassigned-approval,true"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
         boolean approval = entry.endsWith("approval");
         boolean doubleApproval = entry.equals("scheduled-double-approval");
@@ -359,6 +360,15 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
                     token = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password)).path("data").path("token").asText();
                     assertFalse(token.isBlank());
+                    if (!scheduled) {
+                        var newAccountReplay = requestBody("POST", "/api/v1/chat/stream", token,
+                                Map.of("agentId", String.valueOf(agentId), "conversationId", conversation,
+                                        "message", "/approve", "pendingApprovalId", pendingId));
+                        assertEquals("PENDING", jdbc.queryForObject("SELECT status FROM mate_tool_approval WHERE pending_id=?", String.class, pendingId), newAccountReplay);
+                        assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+                        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+                        return;
+                    }
                 }
                 planApprovalReplay.set(plan);
                 String replay = requestBody("POST", "/api/v1/chat/stream", token,
