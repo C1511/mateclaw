@@ -26,7 +26,7 @@ public class GoalJsonAcceptanceService {
     public record Requirement(String criterionKey, String artifactSlot, long revision,
                               List<String> requiredFields, String configuredBy) { }
     public record View(boolean required, List<Requirement> requirements) { }
-    record GoalScope(long id, String conversationId, long workspaceId, String status, boolean required) { }
+    record GoalScope(long id, String conversationId, long workspaceId, long agentId, String status, boolean required) { }
 
     @Transactional
     public View get(Long goalId, String username) {
@@ -92,8 +92,8 @@ public class GoalJsonAcceptanceService {
     }
 
     private GoalScope goal(Long id, boolean lock) {
-        var rows = jdbc.query("SELECT id,conversation_id,workspace_id,status,json_acceptance_required FROM mate_agent_goal WHERE id=? AND deleted=0" + (lock ? " FOR UPDATE" : ""),
-                (row, i) -> new GoalScope(row.getLong("id"), row.getString("conversation_id"), row.getLong("workspace_id"), row.getString("status"), row.getBoolean("json_acceptance_required")), id);
+        var rows = jdbc.query("SELECT id,conversation_id,workspace_id,agent_id,status,json_acceptance_required FROM mate_agent_goal WHERE id=? AND deleted=0" + (lock ? " FOR UPDATE" : ""),
+                (row, i) -> new GoalScope(row.getLong("id"), row.getString("conversation_id"), row.getLong("workspace_id"), row.getLong("agent_id"), row.getString("status"), row.getBoolean("json_acceptance_required")), id);
         if (rows.size() != 1) throw failure(404, "Goal not found");
         return rows.getFirst();
     }

@@ -31,6 +31,7 @@ public class GoalRunCoordinator {
     @Transactional
     public ClaimedRun claim(GoalContinuationStore.Continuation candidate,GoalEntity goal,LocalDateTime now) {
         if(candidate==null || goal==null || candidate.currentAttemptId()!=null) return null;
+        if(!continuations.lockGoal(goal.getId())) return null;
         String token=UUID.randomUUID().toString();
         LocalDateTime until=now.plusSeconds(LEASE_SECONDS);
         if(!continuations.claim(goal.getId(),token,now,until)) return null;
@@ -50,12 +51,14 @@ public class GoalRunCoordinator {
 
     @Transactional
     public boolean markRunning(ClaimedRun run,LocalDateTime now) {
+        if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
         if(!current(run)) return false;
         return attempts.markRunning(run.attempt().id(),run.attempt().leaseToken(),now);
     }
 
     @Transactional
     public boolean renew(ClaimedRun run,LocalDateTime now) {
+        if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
         LocalDateTime until=now.plusSeconds(LEASE_SECONDS);
         if(!continuations.renewFenced(run.goal().getId(),run.attempt().leaseToken(),
                 run.attempt().id(),run.revision(),until)) return false;
@@ -65,6 +68,7 @@ public class GoalRunCoordinator {
     @Transactional
     public boolean checkpoint(ClaimedRun run,String replaySafety,String checkpointType,
                               Long assistantMessageId,LocalDateTime now) {
+        if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
         if(!current(run)) return false;
         return attempts.checkpoint(run.attempt().id(),run.attempt().leaseToken(),replaySafety,
                 checkpointType,assistantMessageId,now);
@@ -72,6 +76,7 @@ public class GoalRunCoordinator {
 
     @Transactional
     public boolean settle(ClaimedRun run,SegmentOutcome outcome,LocalDateTime now) {
+        if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
         if(!current(run)) return false;
         GoalEntity fresh=goals.getById(run.goal().getId());
         Settlement settlement=classify(run,outcome,fresh,now);

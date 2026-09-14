@@ -35,6 +35,11 @@ public class GoalContinuationStore {
         }
     }
 
+    /** Coordinate runtime publication, scheduler settlement and recovery using the goal lock first. */
+    public boolean lockGoal(Long goalId) {
+        return jdbc.queryForList("SELECT id FROM mate_agent_goal WHERE id=? FOR UPDATE", Long.class, goalId).size() == 1;
+    }
+
     public void discover(LocalDateTime now) {
         // Bounded discovery; another instance may insert the same goal concurrently.
         List<Long> ids = jdbc.queryForList("""

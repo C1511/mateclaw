@@ -17,3 +17,9 @@
 仅当前要求引用的槽可发布，Goal 必须 active 或 paused。正文必须是严格 JSON 对象，拒绝重复键、尾随文档、超过 32 层的嵌套及超过 1 MiB 的 UTF-8 内容。每个 Goal 最多保存 32 个版本；达到配额拒绝继续发布，不覆盖旧版本。每版有效期 24 小时，重复发布同样正文也产生新版本。客户端遇到 generation 冲突应重新读取，不自动覆盖他人发布。
 
 这些版本独立存储在数据库，不能用普通工作区文件、缓存路径或文字中的 hash 替代。发布接口不支持更新历史正文；所有版本与槽指针同事务保存。SHA-256 用于标识及完整性核对，不能隔离拥有数据库凭据或宿主权限的攻击者；数据库和服务宿主是此有限协议的可信基础。当前未对 MySQL、Kingbase/PostgreSQL 实例执行迁移验收；H2 服务集成测试不等于外部数据库验证。
+
+## 代理发布
+
+`getManagedGoalJsonSlots` 返回当前 Goal 的用户要求、槽和 generation；`publishManagedGoalJson` 接收 `artifactSlot`、字符串 `expectedGeneration` 和 `jsonContent`。工具不能配置要求，也不能传 Goal ID、账户或 owner fence。普通会话必须携带已认证账户的内部 ID；持久 Goal 的调度执行必须同时匹配当前 continuation、attempt、owner token 和有效租约。两种入口都重新检查对话、工作区、Agent 和启用账户。代理委派的默认禁止列表包含这两个工具，服务仍独立检查身份。
+
+发布与调度结算按 Goal 锁串行化，晚到的旧 owner 不得继续写入。租约结束不会改写已经合法发布的历史版本。匿名会话和没有绑定 Goal attempt 的 cron 不支持此发布协议；身份缺失直接拒绝，不以显示用户名代替认证。

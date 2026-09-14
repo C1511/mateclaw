@@ -21,12 +21,14 @@ public class GoalRecoveryService {
     private final GoalContinuationStore continuations;
     private final ConversationInputQueueStore inputs;
     private final GoalService goals;
+    private final org.springframework.transaction.support.TransactionTemplate transactions;
     private final LocalDateTime startupCutoff=LocalDateTime.now();
     private volatile boolean orphanClaimsReleased;
 
     public GoalRecoveryService(GoalAttemptStore attempts,GoalContinuationStore continuations,
-                               ConversationInputQueueStore inputs,GoalService goals) {
+                               ConversationInputQueueStore inputs,GoalService goals, org.springframework.transaction.PlatformTransactionManager manager) {
         this.attempts=attempts;this.continuations=continuations;this.inputs=inputs;this.goals=goals;
+        this.transactions=new org.springframework.transaction.support.TransactionTemplate(manager);
     }
 
     public RecoveryDecision classify(GoalAttempt attempt) {
@@ -53,13 +55,14 @@ public class GoalRecoveryService {
         }
         int recovered=0;
         for(GoalAttempt attempt:attempts.expired(now,100)) {
-            if(recover(attempt,now)) recovered++;
+            if(Boolean.TRUE.equals(transactions.execute(status -> recover(attempt,now)))) recovered++;
         }
         return recovered;
     }
 
     @Transactional
     boolean recover(GoalAttempt attempt,LocalDateTime now) {
+        if(!continuations.lockGoal(attempt.goalId())) return false;
         var continuation=continuations.get(attempt.goalId());
         if(continuation==null || !attempt.id().equals(continuation.currentAttemptId())
                 || !attempt.leaseToken().equals(continuation.leaseOwner())) return false;

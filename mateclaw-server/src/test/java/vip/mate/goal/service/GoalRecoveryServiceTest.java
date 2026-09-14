@@ -39,7 +39,7 @@ class GoalRecoveryServiceTest {
         jdbc=new JdbcTemplate(ds);attempts=new GoalAttemptStore(jdbc);continuations=new GoalContinuationStore(jdbc);
         inputs=new ConversationInputQueueStore(jdbc,new ObjectMapper());
         coordinator=new GoalRunCoordinator(continuations,attempts,goals,new vip.mate.goal.config.GoalProperties());
-        recovery=new GoalRecoveryService(attempts,continuations,inputs,goals);
+        recovery=new GoalRecoveryService(attempts,continuations,inputs,goals,new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         jdbc.update("""
                 INSERT INTO mate_agent_goal(id,conversation_id,agent_id,workspace_id,created_by,title,
                 description,status,persistent_execution,auto_followup_enabled,create_time,update_time)
@@ -84,6 +84,17 @@ class GoalRecoveryServiceTest {
         assertEquals("blocked",attempts.get(old.attempt().id()).state());
         assertEquals("blocked",continuations.get(1L).state());
         verify(goals).pause(1L,"alice");
+    }
+
+    @Test void recoveryFailureRollsBackAttemptAndContinuationTogether() {
+        var old=coordinator.claim(continuations.get(1L),goal,now);
+        assertTrue(coordinator.markRunning(old,now));
+        assertTrue(coordinator.checkpoint(old,"uncertain","tool_started",null,now.plusSeconds(1)));
+        doThrow(new IllegalStateException("fixture pause failure")).when(goals).pause(1L,"alice");
+        assertThrows(IllegalStateException.class, () -> recovery.recoverExpired(now.plusSeconds(61)));
+        assertEquals("running",attempts.get(old.attempt().id()).state());
+        assertEquals("running",continuations.get(1L).state());
+        assertEquals(old.attempt().id(),continuations.get(1L).currentAttemptId());
     }
 
     private GoalAttempt attempt(String checkpoint,String safety,Long messageId) {

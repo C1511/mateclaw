@@ -38,6 +38,10 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private vip.mate.goal.service.ManagedGoalJsonService artifacts;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager transactions;
+    @Autowired private vip.mate.tool.builtin.ManagedGoalJsonTool managedTool;
+    @Autowired private vip.mate.goal.service.GoalContinuationStore continuations;
+    @Autowired private vip.mate.goal.service.GoalRunCoordinator coordinator;
+
     private String alice;
     private String bob;
 
@@ -249,6 +253,107 @@ class GoalJsonAcceptanceIntegrationTest {
         jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
         assertThrows(MateClawException.class, () -> artifacts.read(goal.getId(), stored.artifactId(), alice));
         assertThrows(MateClawException.class, () -> artifacts.publish(goal.getId(), "report", publication(1, "{}"), alice));
+    }
+
+    private vip.mate.agent.context.ChatOrigin accountOrigin(GoalEntity goal, String username) {
+        Long userId = jdbc.queryForObject("SELECT id FROM mate_user WHERE username=?", Long.class, username);
+        return vip.mate.agent.context.ChatOrigin.web(goal.getConversationId(), username, goal.getWorkspaceId(), null, null, userId)
+                .withAgent(goal.getAgentId());
+    }
+
+    @Test void actualManagedToolUsesServerAccountContextAndExposesRequirements() throws Exception {
+        GoalEntity goal = goal(false);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var origin = accountOrigin(goal, alice);
+        var callbacks = org.springframework.ai.support.ToolCallbacks.from(managedTool);
+        assertEquals(2, callbacks.length);
+        for (var callback : callbacks) {
+            String schema = callback.getToolDefinition().inputSchema();
+            assertFalse(schema.contains("\"goalId\""));
+            assertFalse(schema.contains("\"ownerFence\""));
+            assertFalse(schema.contains("\"context\""));
+            assertFalse(schema.contains("\"requiredFields\""));
+        }
+        assertTrue(managedTool.getManagedGoalJsonSlots(origin.toToolContext()).contains("summary"));
+        String result = managedTool.publishManagedGoalJson("report", "0", "{\"summary\":false}", origin.toToolContext());
+        assertTrue(result.contains("account-runtime"));
+        assertTrue(result.contains("\"generation\":\"1\""));
+        assertThrows(MateClawException.class, () -> managedTool.publishManagedGoalJson("report", "1", "{}", accountOrigin(goal, bob).toToolContext()));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin.withAgent(999L), "report", publication(1, "{}")));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin.withWorkspace(999L, null), "report", publication(1, "{}")));
+        var anonymous = vip.mate.agent.context.ChatOrigin.web(goal.getConversationId(), alice, 1L, null).withAgent(1L);
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(anonymous, "report", publication(1, "{}")));
+        assertEquals(1, artifacts.list(goal.getId(), alice).getFirst().generation());
+    }
+
+    private vip.mate.goal.service.GoalRunCoordinator.ClaimedRun claimed(GoalEntity goal) {
+        jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=TRUE WHERE id=?", goal.getId());
+        var now = java.time.LocalDateTime.now();
+        continuations.discover(now);
+        var run = coordinator.claim(continuations.get(goal.getId()), goals.getById(goal.getId()), now);
+        assertNotNull(run);
+        assertTrue(coordinator.markRunning(run, now));
+        return run;
+    }
+
+    private vip.mate.agent.context.ChatOrigin attemptOrigin(GoalEntity goal, vip.mate.goal.service.GoalRunCoordinator.ClaimedRun run) {
+        return vip.mate.agent.context.ChatOrigin.web(goal.getConversationId(), alice, 1L, null).withAgent(1L)
+                .withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(goal.getId(), run.attempt().id(), null, null, run.attempt().leaseToken()));
+    }
+
+    @Test void actualSchedulerOwnerCanPublishButWrongExpiredAndSupersededOwnersCannot() {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var version = artifacts.publishForRuntime(origin, "report", publication(0, "{}"));
+        assertEquals("goal-attempt", version.producerKind());
+        var wrong = origin.withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(goal.getId(), run.attempt().id(), null, null, "forged"));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(wrong, "report", publication(1, "{}")));
+        var foreign = origin.withConversationId(goal(false).getConversationId());
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(foreign, "report", publication(1, "{}")));
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().minusSeconds(1), run.attempt().id());
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{}")));
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().plusMinutes(5), run.attempt().id());
+        jdbc.update("UPDATE mate_goal_continuation SET current_attempt_id=? WHERE goal_id=?", UUID.randomUUID().toString(), goal.getId());
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{}")));
+        assertEquals(1, artifacts.list(goal.getId(), alice).getFirst().generation());
+    }
+
+    @Test void disabledOwnerAndIncompleteAttributionCannotUseSchedulerFallback() {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var incomplete = origin.withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(goal.getId(), null, null, null, null));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(incomplete, "report", publication(0, "{}")));
+        jdbc.update("UPDATE mate_user SET enabled=FALSE WHERE username=?", alice);
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(0, "{}")));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+    }
+
+    @Test void schedulerSettlementAndPublicationSerializeWithoutLateOwnerWrites() throws Exception {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var origin = attemptOrigin(goal, run);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var publish = workers.submit(() -> {
+                start.await();
+                try { artifacts.publishForRuntime(origin, "report", publication(0, "{}")); return true; }
+                catch (MateClawException ended) { return false; }
+            });
+            var settle = workers.submit(() -> {
+                start.await();
+                return coordinator.settle(run, new SegmentOutcome.Continue("fixture done"), java.time.LocalDateTime.now());
+            });
+            start.countDown();
+            boolean published = publish.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(settle.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(published ? 1 : 0, artifacts.list(goal.getId(), alice).getFirst().generation());
+            assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(published ? 1 : 0, "{}")));
+        }
     }
 
 }

@@ -134,6 +134,8 @@ public class DelegateAgentTool {
             "addGoalCriterion",
             "completeGoal",
             "getGoalStatus",
+            "getManagedGoalJsonSlots",
+            "publishManagedGoalJson",
             "waitForGoalInput",
             // Employee authoring spawns persistent agents; a delegated child
             // doing so risks recursive team creation and privilege creep, so
