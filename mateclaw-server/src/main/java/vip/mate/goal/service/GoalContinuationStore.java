@@ -75,6 +75,10 @@ public class GoalContinuationStore {
     }
 
     public boolean claim(Long goalId, String token, LocalDateTime now, LocalDateTime until) {
+        return claim(goalId, token, now, until, GoalLeaseTime.epoch(now), GoalLeaseTime.epoch(until));
+    }
+
+    boolean claim(Long goalId, String token, LocalDateTime now, LocalDateTime until, long nowEpoch, long untilEpoch) {
         return jdbc.update("""
                 UPDATE mate_goal_continuation SET state='running',lease_owner=?,lease_until=?,lease_until_epoch_second=?,updated_at=?,
                 wake_requested=FALSE,revision=revision+1
@@ -82,7 +86,7 @@ public class GoalContinuationStore {
                 ((state IN ('queued','retry') AND next_run_at<=?)
                  OR (state='running' AND lease_until_epoch_second<=?))
                 AND EXISTS(SELECT 1 FROM mate_agent_goal g WHERE g.id=goal_id AND
-                """ + ELIGIBLE + ")", token, until, GoalLeaseTime.epoch(until), now, goalId, now, GoalLeaseTime.epoch(now)) == 1;
+                """ + ELIGIBLE + ")", token, until, untilEpoch, now, goalId, now, nowEpoch) == 1;
     }
 
     public boolean renew(Long goalId, String token, LocalDateTime until) {
@@ -100,20 +104,24 @@ public class GoalContinuationStore {
                 """, attemptId, LocalDateTime.now(), goalId, token, expectedRevision) == 1;
     }
 
-    public boolean matchesFence(Long goalId, String token, String attemptId, long revision, LocalDateTime now) {
+    public boolean matchesFence(Long goalId, String token, String attemptId, long revision, long nowEpoch) {
         return jdbc.queryForList("""
                 SELECT goal_id FROM mate_goal_continuation
                 WHERE goal_id=? AND lease_owner=? AND current_attempt_id=?
                 AND revision=? AND state='running' AND lease_until_epoch_second>? FOR UPDATE
-                """,Long.class,goalId,token,attemptId,revision,GoalLeaseTime.epoch(now)).size()==1;
+                """,Long.class,goalId,token,attemptId,revision,nowEpoch).size()==1;
     }
 
     public boolean renewFenced(Long goalId,String token,String attemptId,long revision,LocalDateTime until) {
+        return renewFenced(goalId, token, attemptId, revision, until, GoalLeaseTime.epoch(until));
+    }
+
+    boolean renewFenced(Long goalId,String token,String attemptId,long revision,LocalDateTime until,long untilEpoch) {
         return jdbc.update("""
                 UPDATE mate_goal_continuation SET lease_until=?,lease_until_epoch_second=?,updated_at=?
                 WHERE goal_id=? AND lease_owner=? AND current_attempt_id=?
                 AND revision=? AND state='running'
-                """,until,GoalLeaseTime.epoch(until),LocalDateTime.now(),goalId,token,attemptId,revision)==1;
+                """,until,untilEpoch,LocalDateTime.now(),goalId,token,attemptId,revision)==1;
     }
 
     public boolean settleFenced(Long goalId,String token,String attemptId,long revision,String state,
@@ -127,7 +135,7 @@ public class GoalContinuationStore {
                 """,state,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,revision)==1;
     }
 
-    public boolean recoverExpired(Long goalId,String token,String attemptId,LocalDateTime expiredAt,
+    public boolean recoverExpired(Long goalId,String token,String attemptId,long expiredEpoch,
                                   String state,LocalDateTime nextRunAt,int failures,String reason,LocalDateTime now) {
         return jdbc.update("""
                 UPDATE mate_goal_continuation
@@ -135,7 +143,7 @@ public class GoalContinuationStore {
                 lease_owner=NULL,lease_until=NULL,lease_until_epoch_second=0,current_attempt_id=NULL,revision=revision+1,updated_at=?
                 WHERE goal_id=? AND lease_owner=? AND current_attempt_id=? AND state='running'
                 AND lease_until_epoch_second<=?
-                """,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,GoalLeaseTime.epoch(expiredAt))==1;
+                """,state,nextRunAt,failures,bounded(reason),now,goalId,token,attemptId,expiredEpoch)==1;
     }
 
     public boolean settle(Long goalId, String token, String state, LocalDateTime nextRunAt,

@@ -66,7 +66,7 @@ public class GoalContinuationSupervisor {
     public void tick() {
         if (closing || !properties.isEnabled() || !properties.isAllowAutoFollowup()) return;
         LocalDateTime now = LocalDateTime.now(clock);
-        recovery.recoverExpired(now);
+        recovery.recoverExpired(clock.instant());
         active.forEach((id, claimed) -> {
             GoalEntity goal = goals.getById(id);
             boolean cancelled = goal.getStatus()==GoalStatus.PAUSED || goal.getStatus()==GoalStatus.ABANDONED

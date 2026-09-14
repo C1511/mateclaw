@@ -90,7 +90,7 @@ public class GoalJsonTimezoneProcessProbe {
                         context.getBean(GoalAttemptStore.class).get(receipt.getProperty("owner.attempt")),
                         Long.parseLong(receipt.getProperty("owner.revision")));
                 if (coordinator.renew(oldRun, now)) throw new AssertionError("Expired owner renewed after timezone change");
-                if (context.getBean(GoalRecoveryService.class).recoverExpired(now) != 1) throw new AssertionError("Expired owner was not recovered");
+                if (context.getBean(GoalRecoveryService.class).recoverExpired(Instant.now()) != 1) throw new AssertionError("Expired owner was not recovered");
                 var fresh = coordinator.claim(continuations.get(ownerGoal), goals.getById(ownerGoal), now);
                 if (fresh == null || !coordinator.markRunning(fresh, now)) throw new AssertionError("Recovery failed to claim a fresh owner");
                 var freshOrigin = origin.withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(ownerGoal,

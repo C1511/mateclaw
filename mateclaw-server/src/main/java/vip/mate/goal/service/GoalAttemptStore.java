@@ -23,6 +23,13 @@ public class GoalAttemptStore {
     public GoalAttempt create(Long goalId, String conversationId, String parentAttemptId,
                               String triggerType, String leaseToken, LocalDateTime leaseUntil,
                               Long inputItemId, LocalDateTime now) {
+        return create(goalId, conversationId, parentAttemptId, triggerType, leaseToken,
+                leaseUntil, inputItemId, now, GoalLeaseTime.epoch(leaseUntil));
+    }
+
+    GoalAttempt create(Long goalId, String conversationId, String parentAttemptId,
+                       String triggerType, String leaseToken, LocalDateTime leaseUntil,
+                       Long inputItemId, LocalDateTime now, long leaseEpoch) {
         String id = UUID.randomUUID().toString();
         jdbc.update("""
                 INSERT INTO mate_goal_attempt(
@@ -31,7 +38,7 @@ public class GoalAttemptStore {
                     created_at,updated_at)
                 VALUES(?,?,?,?,?,'claimed',?,?,?,?,'safe','claimed',?,?)
                 """, id, goalId, conversationId, parentAttemptId, triggerType, leaseToken,
-                leaseUntil, GoalLeaseTime.epoch(leaseUntil), inputItemId, now, now);
+                leaseUntil, leaseEpoch, inputItemId, now, now);
         return get(id);
     }
 
@@ -49,11 +56,11 @@ public class GoalAttemptStore {
                 """, (rs, row) -> read(rs), goalId, Math.max(1, Math.min(limit, 100)));
     }
 
-    public boolean hasLiveFence(String id, String token, LocalDateTime now) {
+    public boolean hasLiveFence(String id, String token, long nowEpoch) {
         return jdbc.queryForList("""
                 SELECT attempt_id FROM mate_goal_attempt WHERE attempt_id=? AND lease_token=?
                 AND state IN ('claimed','running') AND lease_until_epoch_second>? FOR UPDATE
-                """, String.class, id, token, GoalLeaseTime.epoch(now)).size() == 1;
+                """, String.class, id, token, nowEpoch).size() == 1;
     }
 
     public boolean markRunning(String id, String leaseToken, LocalDateTime now) {
@@ -65,10 +72,14 @@ public class GoalAttemptStore {
 
     public boolean renew(String id, String leaseToken, LocalDateTime leaseUntil,
                          LocalDateTime now) {
+        return renew(id, leaseToken, leaseUntil, now, GoalLeaseTime.epoch(leaseUntil));
+    }
+
+    boolean renew(String id, String leaseToken, LocalDateTime leaseUntil, LocalDateTime now, long leaseEpoch) {
         return jdbc.update("""
                 UPDATE mate_goal_attempt SET lease_until=?,lease_until_epoch_second=?,updated_at=?
                 WHERE attempt_id=? AND lease_token=? AND state IN ('claimed','running')
-                """, leaseUntil, GoalLeaseTime.epoch(leaseUntil), now, id, leaseToken) == 1;
+                """, leaseUntil, leaseEpoch, now, id, leaseToken) == 1;
     }
 
     public boolean checkpoint(String id, String leaseToken, String replaySafety,
@@ -96,11 +107,15 @@ public class GoalAttemptStore {
     }
 
     public List<GoalAttempt> expired(LocalDateTime now, int limit) {
+        return expired(GoalLeaseTime.epoch(now), limit);
+    }
+
+    List<GoalAttempt> expired(long nowEpoch, int limit) {
         return jdbc.query("""
                 SELECT * FROM mate_goal_attempt
                 WHERE state IN ('claimed','running') AND lease_until_epoch_second<=?
                 ORDER BY lease_until_epoch_second,created_at LIMIT ?
-                """, (rs, row) -> read(rs), GoalLeaseTime.epoch(now), Math.max(1, Math.min(limit, 100)));
+                """, (rs, row) -> read(rs), nowEpoch, Math.max(1, Math.min(limit, 100)));
     }
 
     private static GoalAttempt read(ResultSet rs) throws SQLException {

@@ -44,7 +44,9 @@ public class GoalRecoveryService {
         return RecoveryDecision.RETRY_SAFE;
     }
 
-    public int recoverExpired(LocalDateTime now) {
+    public int recoverExpired(java.time.Instant moment) {
+        long nowEpoch=moment.getEpochSecond();
+        LocalDateTime now=GoalLeaseTime.local(nowEpoch);
         if(!orphanClaimsReleased) {
             synchronized(this) {
                 if(!orphanClaimsReleased) {
@@ -54,14 +56,14 @@ public class GoalRecoveryService {
             }
         }
         int recovered=0;
-        for(GoalAttempt attempt:attempts.expired(now,100)) {
-            if(Boolean.TRUE.equals(transactions.execute(status -> recover(attempt,now)))) recovered++;
+        for(GoalAttempt attempt:attempts.expired(nowEpoch,100)) {
+            if(Boolean.TRUE.equals(transactions.execute(status -> recover(attempt,now,nowEpoch)))) recovered++;
         }
         return recovered;
     }
 
     @Transactional
-    boolean recover(GoalAttempt attempt,LocalDateTime now) {
+    boolean recover(GoalAttempt attempt,LocalDateTime now,long nowEpoch) {
         if(!continuations.lockGoal(attempt.goalId())) return false;
         var continuation=continuations.get(attempt.goalId());
         if(continuation==null || !attempt.id().equals(continuation.currentAttemptId())
@@ -73,7 +75,7 @@ public class GoalRecoveryService {
                 ? "uncertain_tool_outcome_requires_review" : "restart_recovery";
         if(!attempts.finish(attempt.id(),attempt.leaseToken(),attemptState,reason,
                 decision.name().toLowerCase(),now)) return false;
-        if(!continuations.recoverExpired(attempt.goalId(),attempt.leaseToken(),attempt.id(),now,
+        if(!continuations.recoverExpired(attempt.goalId(),attempt.leaseToken(),attempt.id(),nowEpoch,
                 projectionState,now,continuation.failures()+1,reason,now)) {
             throw new IllegalStateException("Expired goal projection changed during recovery");
         }

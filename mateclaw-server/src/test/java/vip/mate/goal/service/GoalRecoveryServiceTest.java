@@ -68,7 +68,7 @@ class GoalRecoveryServiceTest {
         assertTrue(coordinator.markRunning(old,now));
         var queued=inputs.enqueue("conv",2L,"alice","follow up",List.of(),now);
         assertTrue(inputs.claimNext("conv",old.attempt().id(),now).isPresent());
-        assertEquals(1,recovery.recoverExpired(now.plusSeconds(61)));
+        assertEquals(1,recovery.recoverExpired(now.plusSeconds(61).atZone(java.time.ZoneId.systemDefault()).toInstant()));
         assertEquals("retryable",attempts.get(old.attempt().id()).state());
         assertEquals("retry",continuations.get(1L).state());
         assertEquals(1,inputs.countQueued("conv"));
@@ -81,7 +81,7 @@ class GoalRecoveryServiceTest {
         var old=coordinator.claim(continuations.get(1L),goal,now);
         assertTrue(coordinator.markRunning(old,now));
         assertTrue(coordinator.checkpoint(old,"uncertain","tool_started",null,now.plusSeconds(1)));
-        assertEquals(1,recovery.recoverExpired(now.plusSeconds(61)));
+        assertEquals(1,recovery.recoverExpired(now.plusSeconds(61).atZone(java.time.ZoneId.systemDefault()).toInstant()));
         assertEquals("blocked",attempts.get(old.attempt().id()).state());
         assertEquals("blocked",continuations.get(1L).state());
         verify(goals).pause(1L,"alice");
@@ -92,7 +92,7 @@ class GoalRecoveryServiceTest {
         assertTrue(coordinator.markRunning(old,now));
         assertTrue(coordinator.checkpoint(old,"uncertain","tool_started",null,now.plusSeconds(1)));
         doThrow(new IllegalStateException("fixture pause failure")).when(goals).pause(1L,"alice");
-        assertThrows(IllegalStateException.class, () -> recovery.recoverExpired(now.plusSeconds(61)));
+        assertThrows(IllegalStateException.class, () -> recovery.recoverExpired(now.plusSeconds(61).atZone(java.time.ZoneId.systemDefault()).toInstant()));
         assertEquals("running",attempts.get(old.attempt().id()).state());
         assertEquals("running",continuations.get(1L).state());
         assertEquals(old.attempt().id(),continuations.get(1L).currentAttemptId());
@@ -112,7 +112,7 @@ class GoalRecoveryServiceTest {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql"))
                 .execute(jdbc.getDataSource());
         assertFalse(coordinator.renew(old, now.plusSeconds(1)));
-        assertEquals(1, recovery.recoverExpired(now.plusSeconds(1)));
+        assertEquals(1, recovery.recoverExpired(now.plusSeconds(1).atZone(java.time.ZoneId.systemDefault()).toInstant()));
         assertEquals(uncertain ? "blocked" : "retryable", attempts.get(old.attempt().id()).state());
         assertEquals(uncertain ? "blocked" : "retry", continuations.get(1L).state());
         if (uncertain) verify(goals).pause(1L, "alice");
