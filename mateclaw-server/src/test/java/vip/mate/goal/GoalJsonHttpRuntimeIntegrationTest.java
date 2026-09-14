@@ -32,13 +32,13 @@ import static org.mockito.Mockito.*;
 @TestPropertySource(properties = {
     "spring.datasource.url=jdbc:h2:mem:json_http_${random.uuid};MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
     "spring.ai.dashscope.api-key=offline-fixture-no-provider",
-    "mateclaw.goal.enabled=true", "mateclaw.plugin.enabled=false", "mateclaw.skill.workspace.auto-init=false",
+    "mateclaw.goal.enabled=true", "mateclaw.goal.supervisor-poll-ms=3600000", "mateclaw.plugin.enabled=false", "mateclaw.skill.workspace.auto-init=false",
     "mateclaw.skill.workspace.root=${java.io.tmpdir}/mateclaw-json-http-skills-${random.uuid}"
 })
 class GoalJsonHttpRuntimeIntegrationTest {
     @MockBean private MemoryManager memory;
     @MockBean private GoalEvaluationService evaluator;
-    @MockBean private GoalContinuationSupervisor supervisor;
+    @Autowired private GoalContinuationSupervisor supervisor;
     @MockBean private ProviderChatModelFactory modelFactory;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private vip.mate.config.LoginRateLimitFilter loginLimiter;
@@ -61,19 +61,27 @@ class GoalJsonHttpRuntimeIntegrationTest {
             org.springframework.test.util.ReflectionTestUtils.getField(loginLimiter, "attempts");
         assertNotNull(attempts);
         attempts.invalidateAll();
+        // Independent journeys share a context; old retryable fixtures must not be redispatched.
+        jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=FALSE");
+        var backoff = (java.util.concurrent.atomic.AtomicReference<?>)
+                org.springframework.test.util.ReflectionTestUtils.getField(supervisor, "providerBackoffUntil");
+        assertNotNull(backoff); backoff.set(null);
     }
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"false,sync,true", "true,sync,true", "false,stream,true", "true,stream,true",
         "false,scheduled,true", "true,scheduled,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
-        "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true"})
+        "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true",
+        "false,supervised,true", "true,supervised,true", "false,supervised-recovered,true", "true,supervised-recovered,true",
+        "false,supervised,false", "true,supervised,false", "false,supervised-recovered,false", "true,supervised-recovered,false"})
     void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry, boolean accepted) throws Exception {
-        boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
+        boolean supervised = entry.startsWith("supervised");
+        boolean scheduled = entry.equals("scheduled") || entry.equals("recovered") || supervised;
         boolean reuse = entry.equals("reuse");
         boolean recheck = entry.equals("recheck");
         boolean queued = entry.equals("queued");
-        boolean recovered = entry.equals("recovered");
+        boolean recovered = entry.equals("recovered") || entry.equals("supervised-recovered");
         String username = "http-json-" + UUID.randomUUID();
         String conversation = UUID.randomUUID().toString();
         long userId = IdWorker.getId(), agentId = IdWorker.getId();
@@ -112,8 +120,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
         GoalRunCoordinator.ClaimedRun run = null;
         if (scheduled) {
             jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=TRUE WHERE id=?", goal.getId());
-            continuations.discover(java.time.LocalDateTime.now());
-            run = claim(goal);
+            if (!supervised || recovered) {
+                continuations.discover(java.time.LocalDateTime.now());
+                run = claim(goal);
+            }
             if (recovered) {
                 var old = run;
                 var staleOrigin = attemptOrigin(goal, old);
@@ -123,11 +133,13 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 long expired = java.time.Instant.now().minusSeconds(1).getEpochSecond();
                 jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", expired, old.attempt().id());
                 jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=? WHERE goal_id=?", expired, goal.getId());
-                assertEquals(1, recovery.recoverExpired(java.time.Instant.now()));
-                assertEquals("retry", continuations.get(goal.getId()).state());
-                run = claim(goal);
-                assertEquals(old.attempt().id(), run.attempt().parentAttemptId());
-                assertNotEquals(old.attempt().leaseToken(), run.attempt().leaseToken());
+                if (!supervised) {
+                    assertEquals(1, recovery.recoverExpired(java.time.Instant.now()));
+                    assertEquals("retry", continuations.get(goal.getId()).state());
+                    run = claim(goal);
+                    assertEquals(old.attempt().id(), run.attempt().parentAttemptId());
+                    assertNotEquals(old.attempt().leaseToken(), run.attempt().leaseToken());
+                }
                 assertFalse(coordinator.renew(old, java.time.LocalDateTime.now()));
                 assertThrows(vip.mate.exception.MateClawException.class, () -> artifacts.publishForRuntime(staleOrigin, "report",
                     new ManagedGoalJsonService.PublishRequest(1L, "{\"summary\":\"stale writer\"}")));
@@ -263,6 +275,37 @@ class GoalJsonHttpRuntimeIntegrationTest {
             } finally {
                 initialResponse.tryEmitEmpty();
                 response.cancel(true);
+            }
+        } else if (supervised) {
+            GoalAttempt finished = null;
+            var active = (Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(supervisor, "active");
+            assertNotNull(active);
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+            try {
+                while (System.nanoTime() < deadline) {
+                    supervisor.tick();
+                    finished = attempts.listRecent(goal.getId(), 2).stream()
+                            .filter(attempt -> attempt.assistantMessageId() != null
+                                    && (accepted ? "succeeded" : "retryable").equals(attempt.state()))
+                            .findFirst().orElse(null);
+                    var projection = continuations.get(goal.getId());
+                    if (finished != null && active.isEmpty() && projection != null
+                            && (accepted ? "completed" : "retry").equals(projection.state())) break;
+                    Thread.sleep(25);
+                }
+                assertNotNull(finished, "Actual supervisor must dispatch and settle a persisted segment");
+                assertTrue(active.isEmpty(), "Supervisor must release the completed worker");
+                assertEquals(accepted ? "completed" : "retry", continuations.get(goal.getId()).state());
+                assertEquals("message_saved", finished.checkpointType());
+                assertTrue(jdbc.queryForObject("SELECT content FROM mate_message WHERE id=?", String.class,
+                        finished.assistantMessageId()).contains(accepted ? "Managed JSON fixture completed." : "PASS from offline fixture."));
+                if (recovered) {
+                    assertEquals(run.attempt().id(), finished.parentAttemptId());
+                    assertNotEquals(run.attempt().leaseToken(), finished.leaseToken());
+                }
+            } finally {
+                jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=FALSE WHERE id=?", goal.getId());
+                runner.cancel(goal.getId());
             }
         } else if (scheduled) {
             SegmentOutcome outcome = runner.run(run, message, recovered);
