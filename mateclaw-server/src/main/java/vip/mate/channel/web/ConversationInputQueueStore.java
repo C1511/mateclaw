@@ -37,14 +37,21 @@ public class ConversationInputQueueStore {
     public QueuedInput enqueue(String conversationId, Long agentId, String createdBy,
                                String message, List<MessageContentPart> contentParts,
                                Long requesterUserId, LocalDateTime now) {
+        return enqueue(conversationId, agentId, createdBy, message, contentParts,
+                requesterUserId, null, now);
+    }
+
+    public QueuedInput enqueue(String conversationId, Long agentId, String createdBy,
+                               String message, List<MessageContentPart> contentParts,
+                               Long requesterUserId, Long selectedGoalId, LocalDateTime now) {
         long id = IdWorker.getId();
         jdbc.update("""
                 INSERT INTO mate_conversation_input_queue(
                     id,conversation_id,agent_id,created_by,message,content_parts,state,
-                    created_at,updated_at,requester_user_id)
-                VALUES(?,?,?,?,?,?,'queued',?,?,?)
+                    created_at,updated_at,requester_user_id,selected_goal_id)
+                VALUES(?,?,?,?,?,?,'queued',?,?,?,?)
                 """, id, conversationId, agentId, createdBy, message == null ? "" : message,
-                writeParts(contentParts), now, now, requesterUserId);
+                writeParts(contentParts), now, now, requesterUserId, selectedGoalId);
         return get(id);
     }
 
@@ -143,7 +150,8 @@ public class ConversationInputQueueStore {
                 rs.getString("message"), readParts(rs.getString("content_parts")),
                 rs.getString("state"), rs.getString("claimed_by_attempt_id"),
                 nullableLong(rs, "persisted_message_id"), rs.getString("cancel_reason"),
-                time(rs, "created_at"), time(rs, "updated_at"), nullableLong(rs, "requester_user_id"));
+                time(rs, "created_at"), time(rs, "updated_at"), nullableLong(rs, "requester_user_id"),
+                nullableLong(rs, "selected_goal_id"));
     }
 
     private String writeParts(List<MessageContentPart> parts) {
@@ -190,13 +198,22 @@ public class ConversationInputQueueStore {
             String cancelReason,
             LocalDateTime createdAt,
             LocalDateTime updatedAt,
-            Long requesterUserId) {
+            Long requesterUserId,
+            Long selectedGoalId) {
+        public QueuedInput(Long id, String conversationId, Long agentId, String createdBy,
+                           String message, List<MessageContentPart> contentParts, String state,
+                           String claimedByAttemptId, Long persistedMessageId, String cancelReason,
+                           LocalDateTime createdAt, LocalDateTime updatedAt, Long requesterUserId) {
+            this(id, conversationId, agentId, createdBy, message, contentParts, state,
+                    claimedByAttemptId, persistedMessageId, cancelReason, createdAt, updatedAt,
+                    requesterUserId, null);
+        }
         public QueuedInput(Long id, String conversationId, Long agentId, String createdBy,
                            String message, List<MessageContentPart> contentParts, String state,
                            String claimedByAttemptId, Long persistedMessageId, String cancelReason,
                            LocalDateTime createdAt, LocalDateTime updatedAt) {
             this(id, conversationId, agentId, createdBy, message, contentParts, state,
-                    claimedByAttemptId, persistedMessageId, cancelReason, createdAt, updatedAt, null);
+                    claimedByAttemptId, persistedMessageId, cancelReason, createdAt, updatedAt, null, null);
         }
     }
 }

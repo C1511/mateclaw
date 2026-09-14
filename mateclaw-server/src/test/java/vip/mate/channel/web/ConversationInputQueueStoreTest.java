@@ -34,7 +34,10 @@ class ConversationInputQueueStoreTest {
                 .execute(dataSource);
         jdbc = new JdbcTemplate(dataSource);
         jdbc.update("INSERT INTO mate_conversation_input_queue(id,conversation_id,agent_id,created_by,message,content_parts,state,created_at,updated_at) VALUES (7,'legacy-conv',1,'mate','pre-upgrade input','[]','queued',?,?)", now, now);
-        new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V199__queued_input_account_identity.sql")).execute(dataSource);
+        new ResourceDatabasePopulator(
+                new ClassPathResource("db/migration/h2/V199__queued_input_account_identity.sql"),
+                new ClassPathResource("db/migration/h2/V201__queued_input_selected_goal.sql"))
+                .execute(dataSource);
         mapper = new ObjectMapper();
         store = new ConversationInputQueueStore(jdbc, mapper);
     }
@@ -63,11 +66,15 @@ class ConversationInputQueueStoreTest {
     void accountIdentitySurvivesReconstructionAndLegacyEntriesStayUnasserted() {
         assertThat(store.get(7L).message()).isEqualTo("pre-upgrade input");
         assertThat(store.get(7L).requesterUserId()).isNull();
+        assertThat(store.get(7L).selectedGoalId()).isNull();
         var known = store.enqueue("conv", 1L, "mate", "known", List.of(), 9223372036854775801L, now);
+        var selected = store.enqueue("conv", 1L, "mate", "selected", List.of(),
+                9223372036854775801L, 9223372036854775799L, now);
         var legacy = store.enqueue("conv", 1L, "mate", "legacy", List.of(), now);
         var restarted = new ConversationInputQueueStore(jdbc, mapper);
         assertThat(restarted.claimNext("conv", "worker", now).orElseThrow().requesterUserId()).isEqualTo(9223372036854775801L);
         assertThat(restarted.get(known.id()).requesterUserId()).isEqualTo(9223372036854775801L);
+        assertThat(restarted.get(selected.id()).selectedGoalId()).isEqualTo(9223372036854775799L);
         assertThat(restarted.get(legacy.id()).requesterUserId()).isNull();
     }
 

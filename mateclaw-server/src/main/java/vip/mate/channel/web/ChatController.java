@@ -1142,8 +1142,17 @@ public class ChatController {
 
         // Commit the payload before publishing acceptance. The stream tracker is
         // only a wake signal; the database row remains authoritative on restart.
-        var stored = inputQueue.enqueue(conversationId, agentId, username, message, contentParts,
-                requesterUserIdOf(auth), LocalDateTime.now());
+        var enqueueConversation = conversationService.findByConversationId(conversationId);
+        Long queueAgentId = agentId == null && enqueueConversation != null
+                ? enqueueConversation.getAgentId() : agentId;
+        if (enqueueConversation == null || queueAgentId == null
+                || !java.util.Objects.equals(queueAgentId, enqueueConversation.getAgentId())) {
+            return R.fail(409, "会话助手已变化，请刷新后重试");
+        }
+        var queuedSelection = captureWebGoal(vip.mate.agent.context.ChatOrigin.web(conversationId,
+                username, enqueueConversation.getWorkspaceId(), null, null, requesterUserIdOf(auth)), queueAgentId);
+        var stored = inputQueue.enqueue(conversationId, queueAgentId, username, message, contentParts,
+                requesterUserIdOf(auth), queuedSelection.selectedGoalId(), LocalDateTime.now());
         boolean queued = streamTracker.notifyQueuedInput(conversationId);
         if (!queued) {
             inputQueue.cancel(stored.id(), "stream_finished_before_queue_registration",
@@ -1524,6 +1533,30 @@ public class ChatController {
             return;
         }
 
+        // A row queued by an older binary has no selection snapshot. If this
+        // conversation has managed Goal history, execution could turn an old
+        // selected request into an explicitly unselected approval after a Goal
+        // ended. Keep the user's text and require a fresh authenticated turn.
+        if (preConsumedInput.selectedGoalId() == null && goalApprovalRuns != null
+                && goalApprovalRuns.hasManagedGoalHistory(conversationId, String.valueOf(agentId))) {
+            if (preConsumedInput.persistedMessageId() == null) {
+                MessageEntity saved = conversationService.saveMessage(conversationId, "user",
+                        preConsumedInput.message(), preConsumedInput.contentParts(), "queued");
+                if (saved == null || !inputQueue.bindMessage(preConsumedInput.id(), queueClaimId,
+                        saved.getId(), LocalDateTime.now())) {
+                    inputQueue.release(preConsumedInput.id(), queueClaimId, LocalDateTime.now());
+                    throw new IllegalStateException("Legacy queued input could not be preserved");
+                }
+            }
+            if (!inputQueue.consume(preConsumedInput.id(), queueClaimId, LocalDateTime.now()))
+                throw new IllegalStateException("Legacy queued input claim was lost");
+            broadcastEvent(conversationId, "warning", Map.of(
+                    "message", "排队消息缺少Goal选择快照，内容已保存，请重新发送"));
+            conversationService.updateStreamStatus(conversationId, "idle");
+            completeEmitterQuietly(emitter, emitterDone);
+            return;
+        }
+
         // Rate Limit 防护：如果上一轮以 rate limit 错误结束，不立即续跑排队消息（必然再次 429）。
         // 改为持久化用户消息 + 通知前端"稍后重试"，避免连锁 429 浪费配额。
         String lastMessage = conversationService.getLastMessage(conversationId);
@@ -1595,7 +1628,8 @@ public class ChatController {
         vip.mate.agent.context.ChatOrigin queuedOrigin =
                 vip.mate.agent.context.ChatOrigin.web(conversationId, preConsumedInput.createdBy(),
                                 queuedConversation.getWorkspaceId(), null, baseUrl, preConsumedInput.requesterUserId())
-                        .withOriginMessageId(queuedOriginMessageId);
+                        .withOriginMessageId(queuedOriginMessageId)
+                        .withSelectedGoalId(preConsumedInput.selectedGoalId());
         queuedOrigin = captureWebGoal(queuedOrigin, agentId);
         Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, preConsumedInput.createdBy(), null, queuedOrigin)
                 .doOnNext(delta -> {
