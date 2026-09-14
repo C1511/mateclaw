@@ -54,9 +54,49 @@ public class GoalJsonTimezoneProcessProbe {
                         if (!bindings.state(goal, "timezone-owner").getFirst().status().equals("EXPIRED")) throw new AssertionError("Expiry fixture must initially be expired");
                     }
                 }
+                jdbc.update("INSERT INTO mate_conversation(id,conversation_id,username,workspace_id,agent_id,create_time,update_time,deleted) VALUES (99004,'timezone-lease','timezone-owner',1,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)");
+                var request = new GoalCreateRequest(); request.setConversationId("timezone-lease");
+                request.setWorkspaceId(1L); request.setAgentId(1L); request.setTitle("lease"); request.setDescription("Owner restart fixture");
+                request.setPersistentExecution(true); request.setAutoFollowupEnabled(true);
+                var goal = goals.create(request, "timezone-owner");
+                requirements.configure(goal.getId(), "r", new GoalJsonAcceptanceService.ConfigureRequest(0L, "report", List.of("summary")), "timezone-owner");
+                var continuations = context.getBean(GoalContinuationStore.class);
+                var coordinator = context.getBean(GoalRunCoordinator.class);
+                var now = java.time.LocalDateTime.now();
+                continuations.discover(now);
+                var run = coordinator.claim(continuations.get(goal.getId()), goals.getById(goal.getId()), now);
+                if (run == null || !coordinator.markRunning(run, now)) throw new AssertionError("Owner fixture failed to claim");
+                jdbc.update("UPDATE mate_goal_attempt SET lease_until=?,lease_until_epoch_second=? WHERE goal_id=?", now.minusSeconds(60), Instant.now().minusSeconds(60).getEpochSecond(), goal.getId());
+                jdbc.update("UPDATE mate_goal_continuation SET lease_until=?,lease_until_epoch_second=? WHERE goal_id=?", now.minusSeconds(60), Instant.now().minusSeconds(60).getEpochSecond(), goal.getId());
+                receipt.setProperty("owner.goal", String.valueOf(goal.getId()));
+                receipt.setProperty("owner.attempt", run.attempt().id());
+                receipt.setProperty("owner.token", run.attempt().leaseToken());
+                receipt.setProperty("owner.revision", String.valueOf(run.revision()));
                 try (var output = Files.newOutputStream(file)) { receipt.store(output, "Disposable timezone fixture"); }
             } else {
                 try (var input = Files.newInputStream(file)) { receipt.load(input); }
+                long ownerGoal = Long.parseLong(receipt.getProperty("owner.goal"));
+                var origin = vip.mate.agent.context.ChatOrigin.web("timezone-lease", "timezone-owner", 1L, null).withAgent(1L)
+                        .withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(ownerGoal,
+                                receipt.getProperty("owner.attempt"), null, null, receipt.getProperty("owner.token")));
+                boolean rejected = false;
+                try { artifacts.publishForRuntime(origin, "report", new ManagedGoalJsonService.PublishRequest(0L, "{}")); }
+                catch (vip.mate.exception.MateClawException expected) { rejected = true; }
+                if (!rejected) throw new AssertionError("Expired scheduler owner regained JSON publication after timezone change");
+                var continuations = context.getBean(GoalContinuationStore.class);
+                var coordinator = context.getBean(GoalRunCoordinator.class);
+                var now = java.time.LocalDateTime.now();
+                var oldRun = new GoalRunCoordinator.ClaimedRun(continuations.get(ownerGoal), goals.getById(ownerGoal),
+                        context.getBean(GoalAttemptStore.class).get(receipt.getProperty("owner.attempt")),
+                        Long.parseLong(receipt.getProperty("owner.revision")));
+                if (coordinator.renew(oldRun, now)) throw new AssertionError("Expired owner renewed after timezone change");
+                if (context.getBean(GoalRecoveryService.class).recoverExpired(now) != 1) throw new AssertionError("Expired owner was not recovered");
+                var fresh = coordinator.claim(continuations.get(ownerGoal), goals.getById(ownerGoal), now);
+                if (fresh == null || !coordinator.markRunning(fresh, now)) throw new AssertionError("Recovery failed to claim a fresh owner");
+                var freshOrigin = origin.withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(ownerGoal,
+                        fresh.attempt().id(), null, null, fresh.attempt().leaseToken()));
+                if (artifacts.publishForRuntime(freshOrigin, "report", new ManagedGoalJsonService.PublishRequest(0L, "{}"))
+                        .generation() != 1) throw new AssertionError("Fresh owner cannot publish after recovery");
                 long expiredGoal = Long.parseLong(receipt.getProperty("expired.goal"));
                 if (bindings.state(expiredGoal, "timezone-owner").getFirst().acceptanceEligible()) {
                     throw new AssertionError("Previously expired JSON became eligible after host timezone changed");

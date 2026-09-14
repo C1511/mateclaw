@@ -6,7 +6,6 @@ import org.springframework.transaction.annotation.Transactional;
 import vip.mate.exception.MateClawException;
 import vip.mate.agent.context.ChatOrigin;
 import java.util.Objects;
-import java.time.LocalDateTime;
 import vip.mate.execution.evidence.service.JsonArtifactRecipe;
 
 import java.nio.charset.StandardCharsets;
@@ -64,13 +63,13 @@ public class ManagedGoalJsonService {
     }
 
     static void verifyLease(RuntimeScope runtime) {
-        if (runtime.leaseUntil() != null && !runtime.leaseUntil().isAfter(LocalDateTime.now())) {
+        if (runtime.leaseUntil() != null && !runtime.leaseUntil().isAfter(Instant.now())) {
             throw failure(409, "Goal attempt lease expired during managed JSON operation");
         }
     }
 
     record RuntimeScope(GoalJsonAcceptanceService.GoalScope goal, String producerKind,
-                        String producerId, LocalDateTime leaseUntil) { }
+                        String producerId, Instant leaseUntil) { }
 
     // All identity comes from server-created ToolContext, never model arguments.
     // Lock order: enabled user -> conversation -> goal -> continuation -> goal attempt.
@@ -109,23 +108,23 @@ public class ManagedGoalJsonService {
             return new RuntimeScope(goal, "account-runtime", String.valueOf(userId), null);
         }
         var continuationLeases = jdbc.query("""
-                SELECT lease_owner,current_attempt_id,state,lease_until FROM mate_goal_continuation WHERE goal_id=? FOR UPDATE
+                SELECT lease_owner,current_attempt_id,state,lease_until_epoch_second FROM mate_goal_continuation WHERE goal_id=? FOR UPDATE
                 """, (r, i) -> Objects.equals(r.getString("lease_owner"), attribution.ownerFence())
                         && Objects.equals(r.getString("current_attempt_id"), attribution.goalAttemptId())
-                        && "running".equals(r.getString("state")) && r.getTimestamp("lease_until") != null
-                        ? r.getTimestamp("lease_until").toLocalDateTime() : null, goal.id());
+                        && "running".equals(r.getString("state"))
+                        ? Instant.ofEpochSecond(r.getLong("lease_until_epoch_second")) : null, goal.id());
         if (continuationLeases.size() != 1 || continuationLeases.getFirst() == null
-                || !continuationLeases.getFirst().isAfter(LocalDateTime.now())) {
+                || !continuationLeases.getFirst().isAfter(Instant.now())) {
             throw failure(409, "Goal continuation owner is no longer current");
         }
         var leases = jdbc.query("""
-                SELECT goal_id,conversation_id,lease_token,state,lease_until FROM mate_goal_attempt WHERE attempt_id=? FOR UPDATE
+                SELECT goal_id,conversation_id,lease_token,state,lease_until_epoch_second FROM mate_goal_attempt WHERE attempt_id=? FOR UPDATE
                 """, (r, i) -> r.getLong("goal_id") == goal.id()
                         && Objects.equals(r.getString("conversation_id"), goal.conversationId())
                         && Objects.equals(r.getString("lease_token"), attribution.ownerFence())
                         && List.of("claimed", "running").contains(r.getString("state"))
-                        ? r.getTimestamp("lease_until").toLocalDateTime() : null, attribution.goalAttemptId());
-        if (leases.size() != 1 || leases.getFirst() == null || !leases.getFirst().isAfter(LocalDateTime.now())) {
+                        ? Instant.ofEpochSecond(r.getLong("lease_until_epoch_second")) : null, attribution.goalAttemptId());
+        if (leases.size() != 1 || leases.getFirst() == null || !leases.getFirst().isAfter(Instant.now())) {
             throw failure(409, "Goal attempt owner fence is no longer current");
         }
         return new RuntimeScope(goal, "goal-attempt", attribution.goalAttemptId(),

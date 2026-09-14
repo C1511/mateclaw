@@ -32,9 +32,10 @@ class GoalRunCoordinatorTest {
         ds.setURL("jdbc:h2:mem:"+ UUID.randomUUID()+";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V120__agent_goal.sql"),
                 new ClassPathResource("db/migration/h2/V188__goal_continuation.sql"),
-                new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql")).execute(ds);
+                new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql"),
+                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);continuations=new GoalContinuationStore(jdbc);attempts=new GoalAttemptStore(jdbc);
-        coordinator=new GoalRunCoordinator(continuations,attempts,goals,properties);
+        coordinator=new GoalRunCoordinator(continuations,attempts,goals,properties,java.time.Clock.fixed(now.atZone(java.time.ZoneId.systemDefault()).toInstant(), java.time.ZoneId.systemDefault()));
         jdbc.update("""
                 INSERT INTO mate_agent_goal(id,conversation_id,agent_id,workspace_id,created_by,title,
                 description,status,persistent_execution,auto_followup_enabled,create_time,update_time)
@@ -87,6 +88,22 @@ class GoalRunCoordinatorTest {
         assertTrue(coordinator.settle(second,new SegmentOutcome.Continue("unfinished"),secondStart));
         assertEquals(secondStart.plusSeconds(600),continuations.get(1L).nextRunAt());
     }
+    @Test void delayedTickCannotRenewUsingItsPreLockTimestamp() {
+        var reference = new java.util.concurrent.atomic.AtomicReference<>(now.atZone(java.time.ZoneId.systemDefault()).toInstant());
+        var clock = new java.time.Clock() {
+            public java.time.ZoneId getZone() { return java.time.ZoneId.systemDefault(); }
+            public java.time.Clock withZone(java.time.ZoneId zone) { return java.time.Clock.fixed(instant(), zone); }
+            public java.time.Instant instant() { return reference.get(); }
+        };
+        var timed = new GoalRunCoordinator(continuations, attempts, goals, properties, clock);
+        var run = timed.claim(continuations.get(1L), goal, now);
+        assertTrue(timed.markRunning(run, now));
+        reference.set(reference.get().plusSeconds(61));
+        assertFalse(timed.renew(run, now));
+        assertFalse(timed.checkpoint(run, "resolved", "tool_completed", null, now));
+        assertFalse(timed.settle(run, new SegmentOutcome.Complete("delayed"), now));
+    }
+
     @Test void selectedJsonGoalCannotSettleCompletedFromSegmentClaimAlone() {
         goal.setJsonAcceptanceRequired(true);
         var run=coordinator.claim(continuations.get(1L),goal,now);

@@ -19,10 +19,18 @@ public class GoalRunCoordinator {
     private final GoalAttemptStore attempts;
     private final GoalService goals;
     private final GoalProperties properties;
+    private final java.time.Clock clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public GoalRunCoordinator(GoalContinuationStore continuations,GoalAttemptStore attempts,GoalService goals,
                               GoalProperties properties) {
+        this(continuations, attempts, goals, properties, java.time.Clock.systemDefaultZone());
+    }
+
+    GoalRunCoordinator(GoalContinuationStore continuations,GoalAttemptStore attempts,GoalService goals,
+                       GoalProperties properties,java.time.Clock clock) {
         this.continuations=continuations;this.attempts=attempts;this.goals=goals;this.properties=properties;
+        this.clock=clock;
     }
 
     public record ClaimedRun(GoalContinuationStore.Continuation candidate,GoalEntity goal,
@@ -32,6 +40,7 @@ public class GoalRunCoordinator {
     public ClaimedRun claim(GoalContinuationStore.Continuation candidate,GoalEntity goal,LocalDateTime now) {
         if(candidate==null || goal==null || candidate.currentAttemptId()!=null) return null;
         if(!continuations.lockGoal(goal.getId())) return null;
+        now=currentTime(now);
         String token=UUID.randomUUID().toString();
         LocalDateTime until=now.plusSeconds(LEASE_SECONDS);
         if(!continuations.claim(goal.getId(),token,now,until)) return null;
@@ -52,24 +61,31 @@ public class GoalRunCoordinator {
     @Transactional
     public boolean markRunning(ClaimedRun run,LocalDateTime now) {
         if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
-        if(!current(run)) return false;
+        now=currentTime(now);
+        if(!current(run,now)) return false;
         return attempts.markRunning(run.attempt().id(),run.attempt().leaseToken(),now);
     }
 
     @Transactional
     public boolean renew(ClaimedRun run,LocalDateTime now) {
         if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
+        now=currentTime(now);
+        if(!current(run,now)) return false;
         LocalDateTime until=now.plusSeconds(LEASE_SECONDS);
         if(!continuations.renewFenced(run.goal().getId(),run.attempt().leaseToken(),
                 run.attempt().id(),run.revision(),until)) return false;
-        return attempts.renew(run.attempt().id(),run.attempt().leaseToken(),until,now);
+        if(!attempts.renew(run.attempt().id(),run.attempt().leaseToken(),until,now)) {
+            throw new IllegalStateException("Goal attempt fence changed during renewal");
+        }
+        return true;
     }
 
     @Transactional
     public boolean checkpoint(ClaimedRun run,String replaySafety,String checkpointType,
                               Long assistantMessageId,LocalDateTime now) {
         if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
-        if(!current(run)) return false;
+        now=currentTime(now);
+        if(!current(run,now)) return false;
         return attempts.checkpoint(run.attempt().id(),run.attempt().leaseToken(),replaySafety,
                 checkpointType,assistantMessageId,now);
     }
@@ -77,7 +93,8 @@ public class GoalRunCoordinator {
     @Transactional
     public boolean settle(ClaimedRun run,SegmentOutcome outcome,LocalDateTime now) {
         if(run==null || !continuations.lockGoal(run.goal().getId())) return false;
-        if(!current(run)) return false;
+        now=currentTime(now);
+        if(!current(run,now)) return false;
         GoalEntity fresh=goals.getById(run.goal().getId());
         Settlement settlement=classify(run,outcome,fresh,now);
         if((outcome instanceof SegmentOutcome.Continue || outcome instanceof SegmentOutcome.Complete)
@@ -93,9 +110,16 @@ public class GoalRunCoordinator {
         return true;
     }
 
-    private boolean current(ClaimedRun run) {
+    private LocalDateTime currentTime(LocalDateTime requested) {
+        // A tick timestamp captured before waiting for the goal lock cannot renew an expired owner.
+        LocalDateTime observed = LocalDateTime.now(clock);
+        return observed.isAfter(requested) ? observed : requested;
+    }
+
+    private boolean current(ClaimedRun run,LocalDateTime now) {
         return run!=null && continuations.matchesFence(run.goal().getId(),run.attempt().leaseToken(),
-                run.attempt().id(),run.revision());
+                run.attempt().id(),run.revision(),now)
+                && attempts.hasLiveFence(run.attempt().id(),run.attempt().leaseToken(),now);
     }
 
     private Settlement classify(ClaimedRun run,SegmentOutcome outcome,GoalEntity fresh,LocalDateTime now) {

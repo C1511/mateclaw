@@ -35,10 +35,11 @@ class GoalRecoveryServiceTest {
         ds.setURL("jdbc:h2:mem:"+ UUID.randomUUID()+";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V120__agent_goal.sql"),
                 new ClassPathResource("db/migration/h2/V188__goal_continuation.sql"),
-                new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql")).execute(ds);
+                new ClassPathResource("db/migration/h2/V189__goal_attempt_and_input_queue.sql"),
+                new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);attempts=new GoalAttemptStore(jdbc);continuations=new GoalContinuationStore(jdbc);
         inputs=new ConversationInputQueueStore(jdbc,new ObjectMapper());
-        coordinator=new GoalRunCoordinator(continuations,attempts,goals,new vip.mate.goal.config.GoalProperties());
+        coordinator=new GoalRunCoordinator(continuations,attempts,goals,new vip.mate.goal.config.GoalProperties(),java.time.Clock.fixed(now.atZone(java.time.ZoneId.systemDefault()).toInstant(), java.time.ZoneId.systemDefault()));
         recovery=new GoalRecoveryService(attempts,continuations,inputs,goals,new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
         jdbc.update("""
                 INSERT INTO mate_agent_goal(id,conversation_id,agent_id,workspace_id,created_by,title,
@@ -95,6 +96,31 @@ class GoalRecoveryServiceTest {
         assertEquals("running",attempts.get(old.attempt().id()).state());
         assertEquals("running",continuations.get(1L).state());
         assertEquals(old.attempt().id(),continuations.get(1L).currentAttemptId());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void legacyLeaseMigrationExpiresOwnersButPreservesRecoverySafety(boolean uncertain) {
+        var old = coordinator.claim(continuations.get(1L), goal, now);
+        assertTrue(coordinator.markRunning(old, now));
+        if (uncertain) assertTrue(coordinator.checkpoint(old, "uncertain", "tool_started", null, now));
+        // Recreate the pre-V198 schema while retaining real persisted attempts/checkpoints.
+        jdbc.execute("DROP INDEX idx_goal_attempt_lease_epoch");
+        jdbc.execute("DROP INDEX idx_goal_continuation_lease_epoch");
+        jdbc.execute("ALTER TABLE mate_goal_attempt DROP COLUMN lease_until_epoch_second");
+        jdbc.execute("ALTER TABLE mate_goal_continuation DROP COLUMN lease_until_epoch_second");
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/h2/V198__goal_absolute_owner_leases.sql"))
+                .execute(jdbc.getDataSource());
+        assertFalse(coordinator.renew(old, now.plusSeconds(1)));
+        assertEquals(1, recovery.recoverExpired(now.plusSeconds(1)));
+        assertEquals(uncertain ? "blocked" : "retryable", attempts.get(old.attempt().id()).state());
+        assertEquals(uncertain ? "blocked" : "retry", continuations.get(1L).state());
+        if (uncertain) verify(goals).pause(1L, "alice");
+        else {
+            var fresh = coordinator.claim(continuations.get(1L), goal, now.plusSeconds(1));
+            assertNotEquals(old.attempt().leaseToken(), fresh.attempt().leaseToken());
+            assertEquals(old.attempt().id(), fresh.attempt().parentAttemptId());
+        }
     }
 
     private GoalAttempt attempt(String checkpoint,String safety,Long messageId) {

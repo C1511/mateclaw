@@ -313,12 +313,26 @@ class GoalJsonAcceptanceIntegrationTest {
         assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(wrong, "report", publication(1, "{}")));
         var foreign = origin.withConversationId(goal(false).getConversationId());
         assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(foreign, "report", publication(1, "{}")));
-        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().minusSeconds(1), run.attempt().id());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", java.time.Instant.now().minusSeconds(1).getEpochSecond(), run.attempt().id());
         assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{}")));
-        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().plusMinutes(5), run.attempt().id());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", java.time.Instant.now().plusSeconds(300).getEpochSecond(), run.attempt().id());
         jdbc.update("UPDATE mate_goal_continuation SET current_attempt_id=? WHERE goal_id=?", UUID.randomUUID().toString(), goal.getId());
         assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(origin, "report", publication(1, "{}")));
         assertEquals(1, artifacts.list(goal.getId(), alice).getFirst().generation());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"mate_goal_attempt", "mate_goal_continuation"})
+    void expiredScheduledOwnerCannotRenewItsWayBackIntoJsonPublication(String table) {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var run = claimed(goal);
+        var now = java.time.LocalDateTime.now();
+        jdbc.update("UPDATE " + table + " SET lease_until_epoch_second=? WHERE goal_id=?", java.time.Instant.now().minusSeconds(1).getEpochSecond(), goal.getId());
+        assertFalse(coordinator.renew(run, now), "An expired owner must obtain a new fenced attempt");
+        assertFalse(coordinator.checkpoint(run, "resolved", "tool_completed", null, now));
+        assertFalse(coordinator.settle(run, new SegmentOutcome.Complete("stale owner"), now));
+        assertThrows(MateClawException.class, () -> artifacts.publishForRuntime(attemptOrigin(goal, run), "report", publication(0, "{}")));
     }
 
     @Test void disabledOwnerAndIncompleteAttributionCannotUseSchedulerFallback() {
@@ -567,10 +581,10 @@ class GoalJsonAcceptanceIntegrationTest {
         bindings.checkForRuntime(origin, "r", checkRequest(1, version));
         var properties = new vip.mate.goal.config.GoalProperties(); properties.setEnabled(true);
         var tool = new vip.mate.tool.builtin.GoalManagementTool(goals, properties, new com.fasterxml.jackson.databind.ObjectMapper(), null);
-        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().minusSeconds(1), run.attempt().id());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", java.time.Instant.now().minusSeconds(1).getEpochSecond(), run.attempt().id());
         assertTrue(tool.completeGoal(origin.toToolContext()).contains("error"));
         assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
-        jdbc.update("UPDATE mate_goal_attempt SET lease_until=? WHERE attempt_id=?", java.time.LocalDateTime.now().plusSeconds(60), run.attempt().id());
+        jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", java.time.Instant.now().plusSeconds(60).getEpochSecond(), run.attempt().id());
         assertTrue(tool.completeGoal(origin.toToolContext()).contains("\"status\":\"completed\""));
     }
 
