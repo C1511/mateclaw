@@ -195,10 +195,12 @@ class GoalManagementToolTest {
     @Test
     void getGoalStatus_active_carriesProgressSummary() {
         GoalEntity g = goal(GoalStatus.ACTIVE);
+        g.setJsonAcceptanceRequired(true);
         g.setProgressSummary("missing DNS");
         g.setCompletionScore(0.62);
         when(goalService.findActiveByConversation("conv-1")).thenReturn(g);
         String result = tool.getGoalStatus(ctxWith("conv-1", 10L, "alice"));
+        assertTrue(result.contains("\"jsonAcceptanceRequired\":true"));
         assertTrue(result.contains("\"goalId\":\"123\""));
         assertTrue(result.contains("\"completionScore\":0.62"));
         assertTrue(result.contains("missing DNS"));

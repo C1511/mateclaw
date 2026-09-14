@@ -42,6 +42,7 @@
               </ul>
 
               <p v-if="goal.progressSummary" class="gp-goal__gap">{{ goal.progressSummary }}</p>
+              <GoalJsonAcceptancePanel :goal-id="goal.id" :status="goal.status" />
               <ExecutionEvidenceList v-if="goal.conversationId" :conversation-id="goal.conversationId" :goal-id="goal.id" />
             </div>
           </div>
@@ -56,6 +57,7 @@ import { watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Goal } from '@/api'
 import ExecutionEvidenceList from '@/components/execution/ExecutionEvidenceList.vue'
+import GoalJsonAcceptancePanel from '@/components/goal/GoalJsonAcceptancePanel.vue'
 
 const props = defineProps<{
   open: boolean

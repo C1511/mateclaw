@@ -1,4 +1,24 @@
 export default {
+  goalJsonAcceptance: {
+    "title": "Managed JSON acceptance",
+    "scope": "Require the listed top-level fields in a platform-managed JSON object, with values other than null (false, zero and empty strings are allowed). Text claims and ordinary file checks cannot satisfy this requirement.",
+    "refresh": "Reload requirements",
+    "required": "JSON acceptance is required before this goal can complete.",
+    "notSelected": "This goal has not selected managed JSON acceptance.",
+    "selectionNotice": "Saving enables a required check for this goal. It cannot be switched off; you can revise its requirements.",
+    "key": "Requirement name",
+    "slot": "Managed artifact name",
+    "fields": "Required JSON fields",
+    "fieldsPlaceholder": "One top-level field per line",
+    "inputHelp": "Names: lowercase letters, digits, underscores or hyphens, starting with a letter. Up to 8 requirements; 1–16 unique fields per requirement.",
+    "save": "Save required check",
+    "edit": "Edit requirement",
+    "newRequirement": "New requirement",
+    "accessError": "Access to this goal is unavailable. Reload after checking your permissions.",
+    "conflict": "The goal or requirement changed. Reload before saving again.",
+    "inputError": "Check the names and enter 1–16 unique, nonempty field names of up to 128 characters each.",
+    "loadError": "Could not load or save the requirements. Try again."
+},
   executionEvidence: {
     jsonCheck: {
       label: 'Required JSON fields', placeholder: 'One top-level field per line', run: 'Check JSON file',

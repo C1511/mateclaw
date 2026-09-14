@@ -1786,6 +1786,7 @@ export interface GoalCriterion {
 }
 
 export interface Goal {
+  jsonAcceptanceRequired?: boolean
   id: string
   conversationId: string
   agentId: string

@@ -1,4 +1,24 @@
 export default {
+  goalJsonAcceptance: {
+    "title": "受管 JSON 验收",
+    "scope": "要求平台受管 JSON 对象存在指定顶层字段且值不为 null（允许 false、0 和空字符串）。文本声明和普通文件诊断不能满足这项要求。",
+    "refresh": "重新读取要求",
+    "required": "此目标必须通过 JSON 验收才能完成。",
+    "notSelected": "此目标尚未选择受管 JSON 验收。",
+    "selectionNotice": "保存会为此目标启用必须通过的检查，之后不能关闭，但可以修改具体要求。",
+    "key": "要求名称",
+    "slot": "受管产物名称",
+    "fields": "必需 JSON 字段",
+    "fieldsPlaceholder": "每行一个顶层字段",
+    "inputHelp": "名称以小写字母开头，仅用小写字母、数字、下划线或短横线。最多8项要求，每项1–16个唯一字段。",
+    "save": "保存必需检查",
+    "edit": "编辑要求",
+    "newRequirement": "新增要求",
+    "accessError": "无法访问此目标，请核对权限后重新读取。",
+    "conflict": "目标或要求已经变化，请重新读取后再保存。",
+    "inputError": "请核对名称，填写1–16个不重复的非空字段名，每个不超过128字符。",
+    "loadError": "无法读取或保存要求，请重试。"
+},
   executionEvidence: {
     jsonCheck: {
       label: 'JSON 必需字段', placeholder: '每行一个顶层字段名', run: '检查 JSON 文件',

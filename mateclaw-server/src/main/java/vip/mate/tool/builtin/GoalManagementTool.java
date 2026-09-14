@@ -222,6 +222,7 @@ public class GoalManagementTool {
         out.put("evalLlmCallsUsed", goal.getEvalLlmCallsUsed());
         out.put("totalLlmCallsUsed", goal.totalLlmCallsUsed());
         out.put("llmCallBudget", goal.getLlmCallBudget());
+        out.put("jsonAcceptanceRequired", goal.isJsonAcceptanceRequired());
         out.put("completionScore", goal.getCompletionScore());
         out.put("progressSummary", goal.getProgressSummary());
         out.put("autoFollowupEnabled", goal.getAutoFollowupEnabled());
