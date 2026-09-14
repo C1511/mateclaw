@@ -131,7 +131,15 @@ class GoalJsonGraphIntegrationTest {
         when(model.stream(any(Prompt.class))).thenAnswer(invocation -> Flux.just(script.answer(invocation)));
         var agent = graphAgent(plan, toolSet, model);
         ChatOriginHolder.set(origin);
-        try { assertNotNull(agent.chat("Produce and check the managed JSON report.", conversation)); }
+        try {
+            if (automatic) {
+                var deltas = structured(agent, "Produce and check the managed JSON report.", conversation);
+                var completed = deltas.stream().filter(d -> "goal_completed".equals(d.eventType())).toList();
+                assertEquals(1, completed.size(), "One committed completion event");
+                var snapshot = (Map<?, ?>) completed.getFirst().eventData().get("goal");
+                assertEquals(Boolean.TRUE, snapshot.get("jsonAcceptanceRequired"), "SSE must preserve the selected acceptance protocol");
+            } else assertNotNull(agent.chat("Produce and check the managed JSON report.", conversation));
+        }
         finally { ChatOriginHolder.clear(); }
         assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus());
         assertTrue(bindings.state(goal.getId(), username).getFirst().acceptanceEligible());
@@ -144,9 +152,9 @@ class GoalJsonGraphIntegrationTest {
         assertTrue(calls.get() >= (automatic ? 5 : 6) && calls.get() <= 10, "Bounded scripted model calls: " + calls.get());
     }
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void automaticGraphCannotPromoteAPassingSemanticVerdictWithoutManagedBytes(boolean plan) throws Exception {
-        Fixture fixture = configuredGoal(false);
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void automaticGraphCannotPromoteAPassingSemanticVerdictWithoutManagedBytes(boolean plan, boolean scheduled) throws Exception {
+        Fixture fixture = configuredGoal(scheduled);
         when(evaluator.evaluate(any(), anyList(), anyString())).thenReturn(new GoalEvaluationResult(
                 1, "PASS from offline semantic fixture", "completed", true, "fixture", 1, 0,
                 List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null));
@@ -166,14 +174,33 @@ class GoalJsonGraphIntegrationTest {
         when(model.stream(any(Prompt.class))).thenAnswer(invocation -> Flux.just(script.answer(invocation)));
         var agent = graphAgent(plan, toolSet, model);
         ChatOriginHolder.set(fixture.origin());
-        try { assertNotNull(agent.chat("Read the current managed JSON requirements and report status.", fixture.conversation())); }
+        try {
+            var deltas = structured(agent, "Read the current managed JSON requirements and report status.", fixture.conversation());
+            assertTrue(deltas.stream().noneMatch(d -> "goal_completed".equals(d.eventType())));
+            assertTrue(deltas.stream().anyMatch(d -> "goal_evaluated".equals(d.eventType())
+                    && Boolean.TRUE.equals(d.eventData().get("skipped"))
+                    && "terminal_write_failed".equals(d.eventData().get("reason"))), "The retry consumer receives a failed completion event");
+        }
         finally { ChatOriginHolder.clear(); }
         verify(evaluator, atLeastOnce()).evaluate(any(), anyList(), anyString());
         assertEquals(GoalStatus.ACTIVE, goals.getById(fixture.goal().getId()).getStatus());
         assertTrue(goals.getById(fixture.goal().getId()).isJsonAcceptanceRequired());
         assertEquals("NO_ARTIFACT", bindings.state(fixture.goal().getId(), fixture.username()).getFirst().status());
         assertTrue(goals.listEvents(fixture.goal().getId(), 30).stream().noneMatch(e -> "completed".equals(e.getEventType())));
+        if (scheduled) {
+            assertTrue(coordinator.settle(fixture.run(), new SegmentOutcome.Retry("evaluation", "evaluation_unavailable"), java.time.LocalDateTime.now()));
+            assertEquals("retry", continuations.get(fixture.goal().getId()).state());
+        }
         assertTrue(calls.get() < 10, "Bounded offline rejection flow: " + calls.get());
+    }
+
+    private List<vip.mate.agent.AgentService.StreamDelta> structured(vip.mate.agent.BaseAgent agent, String prompt, String conversation) {
+        var stream = agent instanceof StateGraphReActAgent react
+                ? react.chatStructuredStream(prompt, conversation)
+                : ((vip.mate.agent.graph.plan.StateGraphPlanExecuteAgent) agent).chatStructuredStream(prompt, conversation);
+        var deltas = stream.collectList().block(java.time.Duration.ofSeconds(30));
+        assertNotNull(deltas);
+        return deltas;
     }
 
     private record Fixture(String username, String conversation, GoalEntity goal,

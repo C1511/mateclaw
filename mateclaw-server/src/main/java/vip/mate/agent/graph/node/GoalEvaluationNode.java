@@ -401,6 +401,7 @@ public class GoalEvaluationNode implements NodeAction {
         snapshot.put("successCheckPrompt", goal.getSuccessCheckPrompt());
         snapshot.put("status", goal.getStatus() == null ? null : goal.getStatus().getValue());
         snapshot.put("persistentExecution", goal.getPersistentExecution());
+        snapshot.put("jsonAcceptanceRequired", goal.isJsonAcceptanceRequired());
         snapshot.put("turnBudget", goal.getTurnBudget());
         snapshot.put("turnsUsed", goal.getTurnsUsed());
         snapshot.put("llmCallBudget", goal.getLlmCallBudget());
