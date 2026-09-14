@@ -356,7 +356,7 @@ public class StepExecutionNode implements NodeAction {
                     for (AssistantMessage.ToolCall toolCall : allToolCalls) {
                         if (isPreApprovedToolCall(toolCall.name(), preApprovedPayload)) {
                             String storedArguments = extractArgumentsFromPayload(preApprovedPayload);
-                            events.add(GraphEventPublisher.toolStart(toolCall.name(), toolCall.arguments()));
+                            events.add(GraphEventPublisher.toolStart(toolCall.id(), toolCall.name(), toolCall.arguments()));
                             // RFC-052: pass the directOutputs collector so that an
                             // approved direct tool's full content is captured here
                             // (instead of leaking into the next LLM round).

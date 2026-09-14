@@ -89,6 +89,9 @@ public class AgentService {
     @Autowired(required = false)
     private vip.mate.agent.runtime.dsh.DshRuntimeService dshRuntimeService;
 
+    @Autowired(required = false)
+    private vip.mate.goal.service.GoalApprovalReplayStream goalApprovalReplay;
+
     /**
      * Runtime Agent instance cache. Keyed first by agentId, then by a model
      * key, so a conversation that pins a non-default model gets its own graph
@@ -546,6 +549,17 @@ public class AgentService {
         trackMemoryRecalls(agentId, userMessage, origin);
         BaseAgent agent = getOrBuildAgentForConversation(agentId, conversationId);
         ChatOrigin captured = origin != null ? origin : ChatOrigin.EMPTY;
+        if (goalApprovalReplay != null && goalApprovalReplay.applies(captured)) {
+            return Flux.using(() -> acquireTurn(conversationId), permit ->
+                    goalApprovalReplay.replay(captured, toolCallPayload, fresh -> {
+                        ChatOriginHolder.set(fresh);
+                        return vip.mate.agent.context.GoalContinuationContext.call(true, () ->
+                                invokeWithLifecycleFlux(agentId, userMessage, conversationId,
+                                        (msg, convId) -> agent.chatWithReplayStream(msg, convId, toolCallPayload,
+                                                requesterId != null ? requesterId : ""), StreamDelta::content));
+                    }), vip.mate.agent.runtime.ConversationTurnGate.Permit::close)
+                    .doFinally(signal -> ChatOriginHolder.clear());
+        }
         return Flux.defer(() -> {
                     ChatOriginHolder.set(captured);
                     return withLifecycleFlux(agentId, userMessage, conversationId,

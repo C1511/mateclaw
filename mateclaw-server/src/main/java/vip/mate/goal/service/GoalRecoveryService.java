@@ -32,7 +32,7 @@ public class GoalRecoveryService {
     }
 
     public RecoveryDecision classify(GoalAttempt attempt) {
-        if("tool_started".equals(attempt.checkpointType()) && "uncertain".equals(attempt.replaySafety())) {
+        if("uncertain".equals(attempt.replaySafety())) {
             return RecoveryDecision.BLOCK_UNCERTAIN_SIDE_EFFECT;
         }
         if("message_saved".equals(attempt.checkpointType()) && attempt.assistantMessageId()!=null) {

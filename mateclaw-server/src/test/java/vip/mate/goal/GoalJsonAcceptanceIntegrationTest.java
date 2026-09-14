@@ -47,6 +47,7 @@ class GoalJsonAcceptanceIntegrationTest {
     @Autowired private vip.mate.goal.service.GoalAttemptStore attempts;
     @Autowired private vip.mate.approval.ApprovalWorkflowService approvals;
     @Autowired private vip.mate.goal.service.GoalApprovalRunService approvalRuns;
+    @Autowired private vip.mate.goal.service.GoalApprovalReplayStream approvalStream;
 
     private String alice;
     private String bob;
@@ -745,6 +746,79 @@ class GoalJsonAcceptanceIntegrationTest {
     private GoalEntity runtimeComplete(GoalEntity goal, GoalEvaluationResult evaluation, vip.mate.agent.context.ChatOrigin origin, boolean automatic) {
         return automatic ? goals.markRuntimeEvaluatedCompleted(goal.getId(), evaluation, origin)
                 : goals.markRuntimeCompleted(goal.getId(), evaluation, origin);
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"normal", "cancel", "error", "unpaired", "renew", "lost"})
+    void approvalStreamOwnsLeaseAndConservativelyRecoversInterruptedTools(String kind) throws Exception {
+        GoalEntity goal = goal(true);
+        acceptance.configure(goal.getId(), "r", request(0, "summary"), alice);
+        var original = claimed(goal);
+        var origin = attemptOrigin(goal, original);
+        String pending;
+        vip.mate.agent.context.ChatOriginHolder.set(origin);
+        try {
+            pending = approvals.createPending(goal.getConversationId(), alice, "getManagedGoalJsonSlots", "{}",
+                    "offline replay lifecycle fixture", "[]", null, "1");
+        } finally { vip.mate.agent.context.ChatOriginHolder.clear(); }
+        assertTrue(coordinator.settle(original, new SegmentOutcome.AwaitApproval("approval_required"), java.time.LocalDateTime.now()));
+        assertNotNull(approvals.resolveAndConsume(pending, alice).consumedSnapshot());
+        var source = reactor.core.publisher.Sinks.many().unicast().<vip.mate.agent.AgentService.StreamDelta>onBackpressureBuffer();
+        var current = new java.util.concurrent.atomic.AtomicReference<vip.mate.agent.context.ChatOrigin>();
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var terminated = new java.util.concurrent.CountDownLatch(1);
+        var cancelled = new java.util.concurrent.CountDownLatch(1);
+        var subscription = approvalStream.replay(origin.withApprovalId(pending), "[]", fresh -> {
+            current.set(fresh); return source.asFlux().doOnCancel(cancelled::countDown);
+        }).subscribe(delta -> {}, error -> { failure.set(error); terminated.countDown(); }, terminated::countDown);
+        try {
+            String attemptId = current.get().executionAttribution().goalAttemptId();
+            source.tryEmitNext(vip.mate.agent.AgentService.StreamDelta.event("tool_call_started", java.util.Map.of("toolCallId", "one")));
+            source.tryEmitNext(vip.mate.agent.AgentService.StreamDelta.event("tool_call_completed", java.util.Map.of("toolCallId", "one")));
+            assertEquals("uncertain", attempts.get(attemptId).replaySafety(),
+                    "Batched graph events do not prove that a later tool has not started");
+            long initialLease = jdbc.queryForObject("SELECT lease_until_epoch_second FROM mate_goal_attempt WHERE attempt_id=?", Long.class, attemptId);
+            if (kind.equals("renew")) {
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(25);
+                long renewed = initialLease;
+                while (renewed == initialLease && System.nanoTime() < deadline) {
+                    Thread.sleep(50);
+                    renewed = jdbc.queryForObject("SELECT lease_until_epoch_second FROM mate_goal_attempt WHERE attempt_id=?", Long.class, attemptId);
+                }
+                assertTrue(renewed > initialLease, "Actual production 20-second renewal must extend the attempt");
+                assertEquals(renewed, jdbc.queryForObject("SELECT lease_until_epoch_second FROM mate_goal_continuation WHERE goal_id=?", Long.class, goal.getId()));
+            }
+            if (kind.equals("lost")) {
+                jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=0 WHERE attempt_id=?", attemptId);
+                jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=0 WHERE goal_id=?", goal.getId());
+                assertTrue(terminated.await(25, java.util.concurrent.TimeUnit.SECONDS));
+                assertInstanceOf(MateClawException.class, failure.get());
+                assertTrue(cancelled.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                assertEquals(reactor.core.publisher.Sinks.EmitResult.FAIL_CANCELLED,
+                        source.tryEmitNext(new vip.mate.agent.AgentService.StreamDelta("late", null)));
+            } else if (kind.equals("cancel")) subscription.dispose();
+            else if (kind.equals("error")) source.tryEmitError(new IllegalStateException("offline interrupted tool fixture"));
+            else {
+                if (kind.equals("unpaired")) source.tryEmitNext(vip.mate.agent.AgentService.StreamDelta.event(
+                        "tool_call_started", java.util.Map.of("toolCallId", "unfinished")));
+                source.tryEmitComplete();
+            }
+            if (kind.equals("normal") || kind.equals("renew")) {
+                assertTrue(terminated.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                assertNull(failure.get());
+                assertEquals("succeeded", attempts.get(attemptId).state());
+                assertEquals("queued", continuations.get(goal.getId()).state());
+                assertEquals(GoalStatus.ACTIVE, goals.getById(goal.getId()).getStatus());
+            } else {
+                assertEquals("running", attempts.get(attemptId).state());
+                assertEquals("uncertain", attempts.get(attemptId).replaySafety());
+                jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=0 WHERE attempt_id=?", attemptId);
+                jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=0 WHERE goal_id=?", goal.getId());
+                assertTrue(recovery.recoverExpired(java.time.Instant.now()) >= 1);
+                assertEquals("blocked", attempts.get(attemptId).state());
+                assertEquals(GoalStatus.PAUSED, goals.getById(goal.getId()).getStatus());
+                assertTrue(acceptance.get(goal.getId(), alice).required());
+            }
+        } finally { subscription.dispose(); }
     }
 
     @ParameterizedTest @ValueSource(strings = {"valid", "pending", "payload", "paused", "running", "legacy", "archived", "agent", "disabled", "wrong-parent"})

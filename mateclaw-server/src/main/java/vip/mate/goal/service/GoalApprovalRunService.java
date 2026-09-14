@@ -34,6 +34,14 @@ public class GoalApprovalRunService {
 
     public record ReplayRun(GoalRunCoordinator.ClaimedRun run, ChatOrigin origin) { }
 
+    public boolean requiresHandoff(ChatOrigin origin) {
+        var link = origin == null ? null : origin.executionAttribution();
+        if (link == null || link.goalId() == null || link.approvalId() == null) return false;
+        var required = jdbc.queryForList("SELECT json_acceptance_required FROM mate_agent_goal WHERE id=? AND deleted=0",
+                Boolean.class, link.goalId());
+        return required.isEmpty() || Boolean.TRUE.equals(required.getFirst());
+    }
+
     @Transactional
     public ReplayRun claim(ChatOrigin requested, String toolCallPayload) {
         ExecutionAttribution link = requested == null ? null : requested.executionAttribution();
