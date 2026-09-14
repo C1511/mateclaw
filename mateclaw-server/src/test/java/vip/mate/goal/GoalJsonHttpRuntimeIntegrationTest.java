@@ -41,15 +41,34 @@ class GoalJsonHttpRuntimeIntegrationTest {
     @MockBean private GoalContinuationSupervisor supervisor;
     @MockBean private ProviderChatModelFactory modelFactory;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private vip.mate.config.LoginRateLimitFilter loginLimiter;
     @Autowired private vip.mate.llm.failover.AvailableProviderPool providerPool;
     @Autowired private ObjectMapper json;
     @Autowired private GoalService goals;
     @Autowired private GoalJsonBindingService bindings;
+    @Autowired private ManagedGoalJsonService artifacts;
+    @Autowired private GoalContinuationStore continuations;
+    @Autowired private GoalRunCoordinator coordinator;
+    @Autowired private GoalRecoveryService recovery;
+    @Autowired private GoalSegmentRunner runner;
+    @Autowired private GoalAttemptStore attempts;
     @LocalServerPort private int port;
 
+    @org.junit.jupiter.api.BeforeEach
+    void isolateLoginRateLimitBetweenIndependentFixtures() {
+        // Each parameter is an independent account journey on the same loopback IP.
+        var attempts = (com.github.benmanes.caffeine.cache.Cache<?, ?>)
+            org.springframework.test.util.ReflectionTestUtils.getField(loginLimiter, "attempts");
+        assertNotNull(attempts);
+        attempts.invalidateAll();
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({"false,false", "true,false", "false,true", "true,true"})
-    void authenticatedHttpTurnPublishesChecksAndCompletesViaProductionRuntime(boolean plan, boolean stream) throws Exception {
+    @org.junit.jupiter.params.provider.CsvSource({"false,sync", "true,sync", "false,stream", "true,stream",
+        "false,scheduled", "true,scheduled", "false,recovered", "true,recovered"})
+    void authenticatedGoalCompletesThroughHttpOrScheduledProductionRuntime(boolean plan, String entry) throws Exception {
+        boolean scheduled = entry.equals("scheduled") || entry.equals("recovered");
+        boolean recovered = entry.equals("recovered");
         String username = "http-json-" + UUID.randomUUID();
         String conversation = UUID.randomUUID().toString();
         long userId = IdWorker.getId(), agentId = IdWorker.getId();
@@ -63,8 +82,13 @@ class GoalJsonHttpRuntimeIntegrationTest {
         jdbc.update("INSERT INTO mate_agent(id,name,agent_type,workspace_id,model_name,max_iterations,enabled,create_time,update_time,deleted) VALUES (?,?,?,1,'json-http-fixture',12,TRUE,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", agentId, "HTTP JSON fixture " + agentId, plan ? "plan_execute" : "react");
         jdbc.update("INSERT INTO mate_conversation(id,conversation_id,username,workspace_id,agent_id,model_provider,model_name,create_time,update_time,deleted) VALUES (?,?,?,1,?,'dashscope','json-http-fixture',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)", IdWorker.getId(), conversation, username, agentId);
         var create = new GoalCreateRequest(); create.setConversationId(conversation); create.setAgentId(agentId); create.setWorkspaceId(1L);
-        create.setTitle("HTTP managed JSON fixture"); create.setDescription("Produce JSON"); create.setPersistentExecution(false); create.setAutoFollowupEnabled(false);
+        create.setTitle("HTTP managed JSON fixture"); create.setDescription("Produce JSON"); create.setPersistentExecution(scheduled); create.setAutoFollowupEnabled(false);
         GoalEntity goal = goals.create(create, username);
+        if (scheduled) {
+            goals.appendCriterion(goal.getId(), "Produce the report", username);
+            goals.recordEvaluation(goal.getId(), new GoalEvaluationResult(1, "offline semantic fixture", "completed", true,
+                "fixture", 1, 0, List.of(new GoalChecklistVerdict.CriterionVerdict("C1", true, "fixture only")), null), 1, 1);
+        }
         when(evaluator.evaluate(any(), anyList(), anyString())).thenReturn(GoalEvaluationResult.fallback("offline_http_fixture"));
         JsonNode login = request("POST", "/api/v1/auth/login", null, Map.of("username", username, "password", password));
         String token = login.path("data").path("token").asText();
@@ -72,6 +96,33 @@ class GoalJsonHttpRuntimeIntegrationTest {
         JsonNode configured = request("PUT", "/api/v1/goals/" + goal.getId() + "/json-acceptance/requirements/r", token,
             Map.of("expectedRevision", "0", "artifactSlot", "report", "requiredFields", List.of("summary")));
         assertEquals(200, configured.path("code").asInt(), configured.toString());
+        GoalRunCoordinator.ClaimedRun run = null;
+        if (scheduled) {
+            jdbc.update("UPDATE mate_agent_goal SET auto_followup_enabled=TRUE WHERE id=?", goal.getId());
+            continuations.discover(java.time.LocalDateTime.now());
+            run = claim(goal);
+            if (recovered) {
+                var old = run;
+                var staleOrigin = attemptOrigin(goal, old);
+                var previous = artifacts.publishForRuntime(staleOrigin, "report",
+                    new ManagedGoalJsonService.PublishRequest(0L, "{\"summary\":\"before recovery\"}"));
+                assertTrue(coordinator.checkpoint(old, "resolved", "tool_completed", null, java.time.LocalDateTime.now()));
+                long expired = java.time.Instant.now().minusSeconds(1).getEpochSecond();
+                jdbc.update("UPDATE mate_goal_attempt SET lease_until_epoch_second=? WHERE attempt_id=?", expired, old.attempt().id());
+                jdbc.update("UPDATE mate_goal_continuation SET lease_until_epoch_second=? WHERE goal_id=?", expired, goal.getId());
+                assertEquals(1, recovery.recoverExpired(java.time.Instant.now()));
+                assertEquals("retry", continuations.get(goal.getId()).state());
+                run = claim(goal);
+                assertEquals(old.attempt().id(), run.attempt().parentAttemptId());
+                assertNotEquals(old.attempt().leaseToken(), run.attempt().leaseToken());
+                assertFalse(coordinator.renew(old, java.time.LocalDateTime.now()));
+                assertThrows(vip.mate.exception.MateClawException.class, () -> artifacts.publishForRuntime(staleOrigin, "report",
+                    new ManagedGoalJsonService.PublishRequest(1L, "{\"summary\":\"stale writer\"}")));
+                assertTrue(assertThrows(vip.mate.exception.MateClawException.class,
+                    () -> goals.markRuntimeCompleted(goal.getId(), null, staleOrigin)).getMessage().contains("owner"));
+                assertEquals("{\"summary\":\"before recovery\"}", artifacts.read(goal.getId(), previous.artifactId(), username).jsonContent());
+            }
+        }
         ChatModel model = mock(ChatModel.class);
         AtomicInteger calls = new AtomicInteger();
         java.util.concurrent.atomic.AtomicReference<String> revision = new java.util.concurrent.atomic.AtomicReference<>();
@@ -95,10 +146,10 @@ class GoalJsonHttpRuntimeIntegrationTest {
                     assertTrue(last.path("required").asBoolean(), String.valueOf(last));
                     revision.set(last.path("requirements").get(0).path("revision").asText());
                     name = "publishManagedGoalJson";
-                    arguments = json.writeValueAsString(Map.of("artifactSlot", "report", "expectedGeneration", "0", "jsonContent", "{\"summary\":false}"));
+                    arguments = json.writeValueAsString(Map.of("artifactSlot", "report", "expectedGeneration", recovered ? "1" : "0", "jsonContent", "{\"summary\":false}"));
                 }
                 case 3 -> {
-                    assertEquals("account-runtime", last.path("producerKind").asText(), String.valueOf(last));
+                    assertEquals(scheduled ? "goal-attempt" : "account-runtime", last.path("producerKind").asText(), String.valueOf(last));
                     name = "checkManagedGoalJson";
                     arguments = json.writeValueAsString(Map.of("criterionKey", "r", "expectedRequirementRevision", revision.get(),
                             "artifactId", last.path("artifactId").asText(), "expectedGeneration", last.path("generation").asText()));
@@ -122,7 +173,18 @@ class GoalJsonHttpRuntimeIntegrationTest {
         when(model.getDefaultOptions()).thenReturn(org.springframework.ai.chat.prompt.ChatOptions.builder().model("json-http-fixture").build());
         when(modelFactory.buildFor(any(), any())).thenReturn(model);
         String message = "Produce, publish, check and complete the managed JSON report.";
-        if (stream) {
+        if (scheduled) {
+            SegmentOutcome outcome = runner.run(run, message, recovered);
+            assertEquals(GoalStatus.COMPLETED, goals.getById(goal.getId()).getStatus(), outcome.toString());
+            var savedAttempt = attempts.get(run.attempt().id());
+            assertEquals("message_saved", savedAttempt.checkpointType());
+            assertNotNull(savedAttempt.assistantMessageId());
+            assertTrue(jdbc.queryForObject("SELECT content FROM mate_message WHERE id=?", String.class,
+                savedAttempt.assistantMessageId()).contains("Managed JSON fixture completed."));
+            assertTrue(coordinator.settle(run, outcome, java.time.LocalDateTime.now()));
+            assertEquals("succeeded", attempts.get(run.attempt().id()).state());
+            assertEquals("completed", continuations.get(goal.getId()).state());
+        } else if (entry.equals("stream")) {
             String events = requestBody("POST", "/api/v1/chat/stream", token,
                 Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
             assertTrue(events.contains("data:"), events);
@@ -137,6 +199,19 @@ class GoalJsonHttpRuntimeIntegrationTest {
         assertTrue(bindings.state(goal.getId(), username).getFirst().acceptanceEligible());
         assertTrue(calls.get() >= 6 && calls.get() <= 10, "Bounded offline model calls: " + calls.get());
         verify(modelFactory, atLeastOnce()).buildFor(any(), any());
+    }
+
+    private GoalRunCoordinator.ClaimedRun claim(GoalEntity goal) {
+        var run = coordinator.claim(continuations.get(goal.getId()), goals.getById(goal.getId()), java.time.LocalDateTime.now());
+        assertNotNull(run);
+        assertTrue(coordinator.markRunning(run, java.time.LocalDateTime.now()));
+        return run;
+    }
+
+    private vip.mate.agent.context.ChatOrigin attemptOrigin(GoalEntity goal, GoalRunCoordinator.ClaimedRun run) {
+        return vip.mate.agent.context.ChatOrigin.web(goal.getConversationId(), goal.getCreatedBy(), goal.getWorkspaceId(), null)
+            .withAgent(goal.getAgentId()).withExecutionAttribution(new vip.mate.agent.context.ExecutionAttribution(
+                goal.getId(), run.attempt().id(), null, null, run.attempt().leaseToken()));
     }
 
     private JsonNode request(String method, String path, String token, Object body) throws Exception {
