@@ -381,6 +381,15 @@ class GoalJsonHttpRuntimeIntegrationTest {
                             Map.of("agentId", String.valueOf(agentId), "conversationId", conversation, "message", message));
                 }
                 JsonNode pending = request("GET", "/api/v1/chat/" + conversation + "/pending-approvals", token, null).path("data");
+                if (queuedTerminal) {
+                    assertEquals(0, pending.size(), waiting);
+                    assertTrue(waiting.contains("queued_input_skipped"), waiting);
+                    assertEquals(0, calls.get(), "A terminal queued Goal must not invoke the model");
+                    assertEquals(GoalStatus.ABANDONED, goals.getById(goal.getId()).getStatus());
+                    assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_tool_approval WHERE conversation_id=?", Integer.class, conversation));
+                    assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM mate_goal_json_artifact WHERE goal_id=?", Integer.class, goal.getId()));
+                    return;
+                }
                 assertEquals(1, pending.size(), waiting);
                 String pendingId = pending.get(0).path("pendingId").asText();
                 assertEquals("getManagedGoalJsonSlots", pending.get(0).path("toolName").asText());

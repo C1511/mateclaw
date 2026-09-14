@@ -1539,31 +1539,22 @@ public class ChatController {
         // ended. Keep the user's text and require a fresh authenticated turn.
         if (preConsumedInput.selectedGoalId() == null && goalApprovalRuns != null
                 && goalApprovalRuns.hasManagedGoalHistory(conversationId, String.valueOf(agentId))) {
-            if (preConsumedInput.persistedMessageId() == null) {
-                MessageEntity saved = conversationService.saveMessage(conversationId, "user",
-                        preConsumedInput.message(), preConsumedInput.contentParts(), "queued");
-                if (saved == null || !inputQueue.bindMessage(preConsumedInput.id(), queueClaimId,
-                        saved.getId(), LocalDateTime.now())) {
-                    inputQueue.release(preConsumedInput.id(), queueClaimId, LocalDateTime.now());
-                    throw new IllegalStateException("Legacy queued input could not be preserved");
-                }
-            }
-            if (!inputQueue.consume(preConsumedInput.id(), queueClaimId, LocalDateTime.now()))
-                throw new IllegalStateException("Legacy queued input claim was lost");
-            broadcastEvent(conversationId, "warning", Map.of(
-                    "message", "排队消息缺少Goal选择快照，内容已保存，请重新发送"));
-            broadcastEvent(conversationId, "queued_input_skipped", Map.of(
-                    "conversationId", conversationId,
-                    "message", preConsumedInput.message() == null ? "" : preConsumedInput.message(),
-                    "reason", "managed_goal_selection_unknown"));
-            if (hasQueuedInput(conversationId)) {
-                sseExecutor.execute(() -> startQueuedMessage(conversationId, emitter, emitterDone,
-                        requesterId, baseUrl));
-            } else {
-                conversationService.updateStreamStatus(conversationId, "idle");
-                completeEmitterQuietly(emitter, emitterDone);
-            }
+            skipQueuedInput(preConsumedInput, queueClaimId, conversationId, emitter, emitterDone,
+                    requesterId, baseUrl, "managed_goal_selection_unknown",
+                    "排队消息缺少Goal选择快照，内容已保存，请重新发送");
             return;
+        }
+        if (preConsumedInput.selectedGoalId() != null && preConsumedInput.selectedGoalId() > 0) {
+            var selectedOrigin = vip.mate.agent.context.ChatOrigin.web(conversationId,
+                    preConsumedInput.createdBy(), queuedConversation.getWorkspaceId(), null,
+                    baseUrl, preConsumedInput.requesterUserId())
+                    .withAgent(agentId).withSelectedGoalId(preConsumedInput.selectedGoalId());
+            if (goalApprovalRuns == null || !goalApprovalRuns.queuedSelectionStillCurrent(selectedOrigin)) {
+                skipQueuedInput(preConsumedInput, queueClaimId, conversationId, emitter, emitterDone,
+                        requesterId, baseUrl, "managed_goal_selection_stale",
+                        "排队消息的Goal或账户已失效，内容已保存，请重新发送");
+                return;
+            }
         }
 
         // Rate Limit 防护：如果上一轮以 rate limit 错误结束，不立即续跑排队消息（必然再次 429）。
@@ -1758,6 +1749,42 @@ public class ChatController {
         streamTracker.setDisposable(conversationId, disposable);
         streamTracker.setEmergencySaveCallback(conversationId,
                 () -> emergencySaveAccumulator(conversationId, accumulator));
+    }
+
+    private void skipQueuedInput(ConversationInputQueueStore.QueuedInput input, String claimId,
+                                 String conversationId, SseEmitter emitter, AtomicBoolean emitterDone,
+                                 String requesterId, String baseUrl, String reason, String warning) {
+        if (input.persistedMessageId() == null) {
+            MessageEntity saved = conversationService.saveMessage(conversationId, "user",
+                    input.message(), input.contentParts(), "queued");
+            if (saved == null || !inputQueue.bindMessage(input.id(), claimId,
+                    saved.getId(), LocalDateTime.now())) {
+                inputQueue.release(input.id(), claimId, LocalDateTime.now());
+                throw new IllegalStateException("Skipped queued input could not be preserved");
+            }
+        }
+        if (!inputQueue.consume(input.id(), claimId, LocalDateTime.now()))
+            throw new IllegalStateException("Skipped queued input claim was lost");
+        // The preceding turn may have removed its RunState already, so a
+        // tracker broadcast can silently disappear. The held emitter is the
+        // authoritative response for this queued input.
+        try {
+            sendEvent(emitter, "warning", Map.of("message", warning));
+            sendEvent(emitter, "queued_input_skipped", Map.of(
+                    "conversationId", conversationId,
+                    "message", input.message() == null ? "" : input.message(),
+                    "reason", reason));
+        } catch (IOException disconnected) {
+            log.debug("Queued-input skip notification could not be delivered for {}: {}",
+                    conversationId, disconnected.getMessage());
+        }
+        if (hasQueuedInput(conversationId)) {
+            sseExecutor.execute(() -> startQueuedMessage(conversationId, emitter, emitterDone,
+                    requesterId, baseUrl));
+        } else {
+            conversationService.updateStreamStatus(conversationId, "idle");
+            completeEmitterQuietly(emitter, emitterDone);
+        }
     }
 
     private boolean hasQueuedInput(String conversationId) {

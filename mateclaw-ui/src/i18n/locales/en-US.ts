@@ -640,6 +640,7 @@ export default {
     queuedReplace: 'Message queued. Press Enter to replace...',
     queuedBadge: '{count} queued',
     queuedLegacyResend: 'Queued message was saved, but its Goal selection is unknown. Please send it again.',
+    queuedSelectionStaleResend: 'Queued message was saved, but its Goal or account is no longer available. Please send it again.',
     // Stream status
     streamStopAction: 'Stop generation',
     streamQueueAction: 'Send after current response',

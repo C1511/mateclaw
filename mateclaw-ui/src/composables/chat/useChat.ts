@@ -98,7 +98,7 @@ export interface UseChatOptions {
    */
   onStreamEnd?: (meta: StreamEndMeta) => void
   /** A legacy queued message was saved as text but needs a fresh request. */
-  onQueuedInputSkipped?: () => void
+  onQueuedInputSkipped?: (reason: string) => void
 }
 
 /** Metadata emitted when a stream ends */
@@ -1857,7 +1857,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       createUserMessage(content, queued?.contentParts, data.conversationId || streamConversationId)
     }
     streamPhase.value = messageQueue.hasQueued.value ? 'queued' : 'idle'
-    onQueuedInputSkipped?.()
+    onQueuedInputSkipped?.(data.reason || '')
   })
 
   // ===== Async task completion events (video / image / music generation) =====

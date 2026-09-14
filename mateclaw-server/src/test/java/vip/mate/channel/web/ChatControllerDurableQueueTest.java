@@ -80,9 +80,13 @@ class ChatControllerDurableQueueTest {
         when(conversations.findByConversationId("conv")).thenReturn(conversation);
         when(agents.chatStructuredStream(eq(2L), eq("queued"), eq("conv"), any(), any(), any()))
                 .thenReturn(reactor.core.publisher.Flux.never());
+        var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
+        when(runs.queuedSelectionStillCurrent(any())).thenReturn(true);
+        when(runs.captureSelectedGoal(any())).thenAnswer(invocation -> invocation.getArgument(0));
         ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class), streams,
                 new ObjectMapper(), mock(ConversationCompletionPublisher.class), mock(MemoryOwnerResolver.class),
                 mock(ChatUploadLocationResolver.class), mock(OfficePreviewService.class), queue);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "goalApprovalRuns", runs);
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(controller, "startQueuedMessage", "conv",
                 new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(),
                 new java.util.concurrent.atomic.AtomicBoolean(true), "previous-turn-user", "http://localhost");
@@ -121,15 +125,15 @@ class ChatControllerDurableQueueTest {
                 mock(OfficePreviewService.class), queue);
         org.springframework.test.util.ReflectionTestUtils.setField(controller, "goalApprovalRuns", runs);
 
+        var emitter = new RecordingEmitter();
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(controller, "startQueuedMessage", "conv",
-                new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(),
+                emitter,
                 new java.util.concurrent.atomic.AtomicBoolean(false), "alice", "http://localhost");
 
         org.mockito.Mockito.verify(conversations).saveMessage("conv", "user", "old queued text", List.of(), "queued");
         org.mockito.Mockito.verify(queue).bindMessage(eq(92L), any(), eq(101L), any());
         org.mockito.Mockito.verify(queue).consume(eq(92L), any(), any());
-        org.mockito.Mockito.verify(streams).broadcast(eq("conv"), eq("queued_input_skipped"),
-                org.mockito.ArgumentMatchers.contains("old queued text"));
+        assertThat(emitter.events.toString()).contains("queued_input_skipped", "old queued text");
         org.mockito.Mockito.verifyNoInteractions(agents);
     }
 
@@ -171,6 +175,15 @@ class ChatControllerDurableQueueTest {
                 .chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any());
         org.mockito.Mockito.verify(queue).consume(eq(92L), any(), any());
         org.mockito.Mockito.verify(queue).consume(eq(93L), any(), any());
+    }
+
+    private static final class RecordingEmitter extends org.springframework.web.servlet.mvc.method.annotation.SseEmitter {
+        private final StringBuilder events = new StringBuilder();
+
+        @Override
+        public void send(SseEventBuilder builder) {
+            builder.build().forEach(part -> events.append(part.getData()));
+        }
     }
 
 }

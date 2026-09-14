@@ -53,6 +53,24 @@ public class GoalApprovalRunService {
         return origin.withSelectedGoalId(selected.getFirst());
     }
 
+    /** A queued selected turn must still have its original Goal and account before execution starts. */
+    public boolean queuedSelectionStillCurrent(ChatOrigin origin) {
+        if (origin == null || origin.selectedGoalId() == null || origin.selectedGoalId() <= 0
+                || origin.requesterUserId() == null || origin.requesterId() == null)
+            return false;
+        try {
+            return acceptance.withAuthenticatedUser(origin.requesterUserId(), origin.requesterId(), current -> {
+                var scope = acceptance.authorizedGoal(origin.selectedGoalId(), current, true);
+                return scope.required() && java.util.List.of("active", "paused").contains(scope.status())
+                        && Objects.equals(scope.conversationId(), origin.conversationId())
+                        && Objects.equals(scope.workspaceId(), origin.workspaceId())
+                        && Objects.equals(scope.agentId(), origin.agentId());
+            });
+        } catch (vip.mate.exception.MateClawException stale) {
+            return false;
+        }
+    }
+
     public boolean requiresHandoff(ChatOrigin origin) {
         var link = origin == null ? null : origin.executionAttribution();
         if (link == null || link.goalId() == null || link.approvalId() == null) return false;

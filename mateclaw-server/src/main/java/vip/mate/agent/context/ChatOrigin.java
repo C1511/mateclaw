@@ -79,7 +79,7 @@ public record ChatOrigin(
         @Nullable Long requesterUserId,
         @Nullable Long originMessageId,
         @Nullable ExecutionAttribution executionAttribution,
-        /** Goal selected when approval was created: null=legacy unknown, 0=observed unselected. */
+        /** Managed Goal captured for this turn: null=legacy unknown, 0=observed unselected. */
         @Nullable Long selectedGoalId
 ) {
 
