@@ -97,6 +97,8 @@ export interface UseChatOptions {
    * The caller should perform history reconcile / persistence in this callback.
    */
   onStreamEnd?: (meta: StreamEndMeta) => void
+  /** A legacy queued message was saved as text but needs a fresh request. */
+  onQueuedInputSkipped?: () => void
 }
 
 /** Metadata emitted when a stream ends */
@@ -219,7 +221,7 @@ export function buildChatStreamRequestBody(content: string, options: SendMessage
 }
 
 export function useChat(options: UseChatOptions): UseChatReturn {
-  const { baseUrl, token, onStreamEnd } = options
+  const { baseUrl, token, onStreamEnd, onQueuedInputSkipped } = options
   const thinkingLevelRef = options.thinkingLevel
 
   /**
@@ -1843,6 +1845,19 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     phaseInfo.value = null
     // New turn — reset lifecycle so the loading bar shows pre-token progress.
     lifecycleStage.value = { stage: 'connecting', since: Date.now() }
+  })
+
+  stream.on('queued_input_skipped', (data) => {
+    if (isStaleEvent(data)) return
+    // The server saved this legacy queued input as user text without running
+    // it. Remove only that queue entry; later queued inputs may still run.
+    const queued = messageQueue.dequeue()
+    const content = data.message || queued?.content || ''
+    if (content) {
+      createUserMessage(content, queued?.contentParts, data.conversationId || streamConversationId)
+    }
+    streamPhase.value = messageQueue.hasQueued.value ? 'queued' : 'idle'
+    onQueuedInputSkipped?.()
   })
 
   // ===== Async task completion events (video / image / music generation) =====

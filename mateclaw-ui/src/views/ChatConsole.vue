@@ -848,6 +848,7 @@ const {
       }
     }
   },
+  onQueuedInputSkipped: () => mcToast.warning(t('chat.queuedLegacyResend')),
 })
 
 const teamRunRouteQuery = computed(() => readTeamRunRouteQuery(route.query))

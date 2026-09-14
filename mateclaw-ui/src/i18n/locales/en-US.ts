@@ -639,6 +639,7 @@ export default {
     queuedCancel: 'Cancel',
     queuedReplace: 'Message queued. Press Enter to replace...',
     queuedBadge: '{count} queued',
+    queuedLegacyResend: 'Queued message was saved, but its Goal selection is unknown. Please send it again.',
     // Stream status
     streamStopAction: 'Stop generation',
     streamQueueAction: 'Send after current response',

@@ -36,6 +36,7 @@ export type SSEEventType =
   | 'turn_interrupted'
   | 'queued_input_accepted'
   | 'queued_input_started'
+  | 'queued_input_skipped'
   // 异步任务事件
   | 'async_task_progress'
   | 'async_task_completed'

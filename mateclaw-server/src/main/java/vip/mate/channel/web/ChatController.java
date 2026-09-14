@@ -1552,8 +1552,17 @@ public class ChatController {
                 throw new IllegalStateException("Legacy queued input claim was lost");
             broadcastEvent(conversationId, "warning", Map.of(
                     "message", "排队消息缺少Goal选择快照，内容已保存，请重新发送"));
-            conversationService.updateStreamStatus(conversationId, "idle");
-            completeEmitterQuietly(emitter, emitterDone);
+            broadcastEvent(conversationId, "queued_input_skipped", Map.of(
+                    "conversationId", conversationId,
+                    "message", preConsumedInput.message() == null ? "" : preConsumedInput.message(),
+                    "reason", "managed_goal_selection_unknown"));
+            if (hasQueuedInput(conversationId)) {
+                sseExecutor.execute(() -> startQueuedMessage(conversationId, emitter, emitterDone,
+                        requesterId, baseUrl));
+            } else {
+                conversationService.updateStreamStatus(conversationId, "idle");
+                completeEmitterQuietly(emitter, emitterDone);
+            }
             return;
         }
 

@@ -100,6 +100,7 @@ class ChatControllerDurableQueueTest {
         AgentService agents = mock(AgentService.class);
         ConversationService conversations = mock(ConversationService.class);
         ConversationInputQueueStore queue = mock(ConversationInputQueueStore.class);
+        ChatStreamTracker streams = mock(ChatStreamTracker.class);
         var input = new QueuedInput(92L, "conv", 2L, "alice", "old queued text",
                 List.of(), "claimed", "claim", null, null,
                 LocalDateTime.now(), LocalDateTime.now(), 42L, null);
@@ -115,7 +116,7 @@ class ChatControllerDurableQueueTest {
         var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
         when(runs.hasManagedGoalHistory("conv", "2")).thenReturn(true);
         ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class),
-                mock(ChatStreamTracker.class), new ObjectMapper(), mock(ConversationCompletionPublisher.class),
+                streams, new ObjectMapper(), mock(ConversationCompletionPublisher.class),
                 mock(MemoryOwnerResolver.class), mock(ChatUploadLocationResolver.class),
                 mock(OfficePreviewService.class), queue);
         org.springframework.test.util.ReflectionTestUtils.setField(controller, "goalApprovalRuns", runs);
@@ -127,7 +128,49 @@ class ChatControllerDurableQueueTest {
         org.mockito.Mockito.verify(conversations).saveMessage("conv", "user", "old queued text", List.of(), "queued");
         org.mockito.Mockito.verify(queue).bindMessage(eq(92L), any(), eq(101L), any());
         org.mockito.Mockito.verify(queue).consume(eq(92L), any(), any());
+        org.mockito.Mockito.verify(streams).broadcast(eq("conv"), eq("queued_input_skipped"),
+                org.mockito.ArgumentMatchers.contains("old queued text"));
         org.mockito.Mockito.verifyNoInteractions(agents);
+    }
+
+    @Test
+    void skippingAnOldRowStillRunsTheNextQueuedMessage() {
+        AgentService agents = mock(AgentService.class);
+        ConversationService conversations = mock(ConversationService.class);
+        ConversationInputQueueStore queue = mock(ConversationInputQueueStore.class);
+        var old = new QueuedInput(92L, "conv", 2L, "alice", "old",
+                List.of(), "claimed", "first", 100L, null,
+                LocalDateTime.now(), LocalDateTime.now(), 42L, null);
+        var next = new QueuedInput(93L, "conv", 2L, "alice", "next",
+                List.of(), "claimed", "second", 101L, null,
+                LocalDateTime.now(), LocalDateTime.now(), 42L, 0L);
+        when(queue.claimNext(eq("conv"), any(), any()))
+                .thenReturn(java.util.Optional.of(old), java.util.Optional.of(next));
+        when(queue.consume(eq(92L), any(), any())).thenReturn(true);
+        when(queue.consume(eq(93L), any(), any())).thenReturn(true);
+        when(queue.countQueued("conv")).thenReturn(1);
+        var conversation = new vip.mate.workspace.conversation.model.ConversationEntity();
+        conversation.setConversationId("conv"); conversation.setAgentId(2L); conversation.setWorkspaceId(3L);
+        when(conversations.findByConversationId("conv")).thenReturn(conversation);
+        var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
+        when(runs.hasManagedGoalHistory("conv", "2")).thenReturn(true);
+        when(runs.captureSelectedGoal(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(agents.chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any()))
+                .thenReturn(reactor.core.publisher.Flux.never());
+        ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class),
+                mock(ChatStreamTracker.class), new ObjectMapper(), mock(ConversationCompletionPublisher.class),
+                mock(MemoryOwnerResolver.class), mock(ChatUploadLocationResolver.class),
+                mock(OfficePreviewService.class), queue);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "goalApprovalRuns", runs);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(controller, "startQueuedMessage", "conv",
+                new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(),
+                new java.util.concurrent.atomic.AtomicBoolean(false), "alice", "http://localhost");
+
+        org.mockito.Mockito.verify(agents, org.mockito.Mockito.timeout(2000))
+                .chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any());
+        org.mockito.Mockito.verify(queue).consume(eq(92L), any(), any());
+        org.mockito.Mockito.verify(queue).consume(eq(93L), any(), any());
     }
 
 }

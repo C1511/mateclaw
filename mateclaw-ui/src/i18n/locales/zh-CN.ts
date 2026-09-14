@@ -639,6 +639,7 @@ export default {
     queuedCancel: '取消',
     queuedReplace: '消息已排队，按回车替换...',
     queuedBadge: '{count} 条排队',
+    queuedLegacyResend: '排队消息已保存，但无法确认原来的目标选择。请重新发送。',
     // 流状态
     streamStopAction: '停止生成',
     streamQueueAction: '当前回复结束后发送',
