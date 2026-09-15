@@ -38,7 +38,7 @@ public class GoalApprovalRunService {
     public ChatOrigin captureSelectedGoal(ChatOrigin origin) {
         if (origin == null || origin.cronOrigin() || origin.requesterUserId() == null
                 || origin.conversationId() == null || origin.agentId() == null || origin.workspaceId() == null
-                || (origin.selectedGoalId() != null && origin.selectedGoalId() > 0)
+                || origin.selectedGoalId() != null
                 || (origin.executionAttribution() != null
                     && origin.executionAttribution().goalAttemptId() != null)) return origin;
         var selected = jdbc.queryForList("""
@@ -53,13 +53,22 @@ public class GoalApprovalRunService {
         return origin.withSelectedGoalId(selected.getFirst());
     }
 
-    /** A queued selected turn must still have its original Goal and account before execution starts. */
+    /** A queued selection snapshot, including explicit zero, must still match before execution starts. */
     public boolean queuedSelectionStillCurrent(ChatOrigin origin) {
-        if (origin == null || origin.selectedGoalId() == null || origin.selectedGoalId() <= 0
-                || origin.requesterUserId() == null || origin.requesterId() == null)
+        if (origin == null || origin.selectedGoalId() == null || origin.selectedGoalId() < 0
+                || origin.requesterUserId() == null || origin.requesterId() == null
+                || origin.conversationId() == null || origin.agentId() == null || origin.workspaceId() == null)
             return false;
         try {
             return acceptance.withAuthenticatedUser(origin.requesterUserId(), origin.requesterId(), current -> {
+                if (origin.selectedGoalId() == 0) {
+                    Integer selected = jdbc.queryForObject("""
+                            SELECT COUNT(*) FROM mate_agent_goal
+                            WHERE conversation_id=? AND agent_id=? AND workspace_id=?
+                              AND json_acceptance_required=TRUE AND status IN ('active','paused') AND deleted=0
+                            """, Integer.class, origin.conversationId(), origin.agentId(), origin.workspaceId());
+                    return selected != null && selected == 0;
+                }
                 var scope = acceptance.authorizedGoal(origin.selectedGoalId(), current, true);
                 return scope.required() && java.util.List.of("active", "paused").contains(scope.status())
                         && Objects.equals(scope.conversationId(), origin.conversationId())

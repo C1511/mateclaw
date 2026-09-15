@@ -149,6 +149,14 @@ class GoalJsonHttpRuntimeIntegrationTest {
         JsonNode configured = request("PUT", "/api/v1/goals/" + goal.getId() + "/json-acceptance/requirements/r", token,
             Map.of("expectedRevision", "0", "artifactSlot", "report", "requiredFields", List.of("summary")));
         assertEquals(200, configured.path("code").asInt(), configured.toString());
+        if (!plan && entry.equals("sync") && accepted) {
+            var explicitlyUnselected = ChatOrigin.web(conversation, username, 1L, null, null, userId)
+                    .withAgent(agentId).withSelectedGoalId(0L);
+            assertEquals(0L, approvalRuns.captureSelectedGoal(explicitlyUnselected).selectedGoalId(),
+                    "An explicit queue snapshot must not be recaptured into a later Goal");
+            assertFalse(approvalRuns.queuedSelectionStillCurrent(explicitlyUnselected),
+                    "An unselected queue snapshot must become stale when a managed Goal appears");
+        }
         if (reuse) {
             for (long generation = 0; generation < 32; generation++) {
                 artifacts.publish(goal.getId(), "report", new ManagedGoalJsonService.PublishRequest(generation, "{\"summary\":false}"), username);

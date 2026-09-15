@@ -1544,7 +1544,7 @@ public class ChatController {
                     "排队消息缺少Goal选择快照，内容已保存，请重新发送");
             return;
         }
-        if (preConsumedInput.selectedGoalId() != null && preConsumedInput.selectedGoalId() > 0) {
+        if (preConsumedInput.selectedGoalId() != null) {
             var selectedOrigin = vip.mate.agent.context.ChatOrigin.web(conversationId,
                     preConsumedInput.createdBy(), queuedConversation.getWorkspaceId(), null,
                     baseUrl, preConsumedInput.requesterUserId())

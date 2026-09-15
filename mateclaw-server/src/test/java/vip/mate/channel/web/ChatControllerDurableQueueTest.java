@@ -138,6 +138,45 @@ class ChatControllerDurableQueueTest {
     }
 
     @Test
+    void explicitlyUnselectedQueuedInputDoesNotJoinGoalThatAppearedWhileWaiting() {
+        AgentService agents = mock(AgentService.class);
+        ConversationService conversations = mock(ConversationService.class);
+        ConversationInputQueueStore queue = mock(ConversationInputQueueStore.class);
+        ChatStreamTracker streams = mock(ChatStreamTracker.class);
+        var input = new QueuedInput(94L, "conv", 2L, "alice", "unselected queued text",
+                List.of(), "claimed", "claim", null, null,
+                LocalDateTime.now(), LocalDateTime.now(), 42L, 0L);
+        when(queue.claimNext(eq("conv"), any(), any())).thenReturn(java.util.Optional.of(input));
+        var saved = new vip.mate.workspace.conversation.model.MessageEntity(); saved.setId(102L);
+        when(conversations.saveMessage("conv", "user", "unselected queued text", List.of(), "queued"))
+                .thenReturn(saved);
+        when(queue.bindMessage(eq(94L), any(), eq(102L), any())).thenReturn(true);
+        when(queue.consume(eq(94L), any(), any())).thenReturn(true);
+        when(agents.chatStructuredStream(eq(2L), eq("unselected queued text"), eq("conv"),
+                eq("alice"), any(), any())).thenReturn(reactor.core.publisher.Flux.never());
+        var conversation = new vip.mate.workspace.conversation.model.ConversationEntity();
+        conversation.setConversationId("conv"); conversation.setAgentId(2L); conversation.setWorkspaceId(3L);
+        when(conversations.findByConversationId("conv")).thenReturn(conversation);
+        var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
+        when(runs.queuedSelectionStillCurrent(any())).thenReturn(false);
+        ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class),
+                streams, new ObjectMapper(), mock(ConversationCompletionPublisher.class),
+                mock(MemoryOwnerResolver.class), mock(ChatUploadLocationResolver.class),
+                mock(OfficePreviewService.class), queue);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "goalApprovalRuns", runs);
+
+        var emitter = new RecordingEmitter();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(controller, "startQueuedMessage", "conv",
+                emitter, new java.util.concurrent.atomic.AtomicBoolean(false), "alice", "http://localhost");
+
+        org.mockito.Mockito.verify(runs).queuedSelectionStillCurrent(any());
+        org.mockito.Mockito.verify(conversations).saveMessage("conv", "user", "unselected queued text", List.of(), "queued");
+        org.mockito.Mockito.verify(queue).consume(eq(94L), any(), any());
+        assertThat(emitter.events.toString()).contains("queued_input_skipped", "unselected queued text");
+        org.mockito.Mockito.verifyNoInteractions(agents);
+    }
+
+    @Test
     void skippingAnOldRowStillRunsTheNextQueuedMessage() {
         AgentService agents = mock(AgentService.class);
         ConversationService conversations = mock(ConversationService.class);
@@ -158,6 +197,7 @@ class ChatControllerDurableQueueTest {
         when(conversations.findByConversationId("conv")).thenReturn(conversation);
         var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
         when(runs.hasManagedGoalHistory("conv", "2")).thenReturn(true);
+        when(runs.queuedSelectionStillCurrent(any())).thenReturn(true);
         when(runs.captureSelectedGoal(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(agents.chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any()))
                 .thenReturn(reactor.core.publisher.Flux.never());
