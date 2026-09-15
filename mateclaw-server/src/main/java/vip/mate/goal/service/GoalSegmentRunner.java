@@ -150,13 +150,15 @@ public class GoalSegmentRunner {
                         return new SegmentOutcome.Cancelled("paused");
                     boolean required=currentGoal!=null && currentGoal.isJsonAcceptanceRequired();
                     boolean selected=queued.selectedGoalId()!=null && queued.selectedGoalId()>0;
+                    boolean unavailable=currentGoal==null
+                            || currentGoal.getStatus()!=vip.mate.goal.model.GoalStatus.ACTIVE;
                     boolean ambiguousLegacy=queued.selectedGoalId()==null && !required && approvalRuns!=null
                             && approvalRuns.hasManagedGoalHistory(convId,String.valueOf(goal.getAgentId()));
-                    if (required || selected || ambiguousLegacy) {
+                    if (required || selected || ambiguousLegacy || unavailable) {
                         var queuedOrigin=ChatOrigin.web(convId,queued.createdBy(),goal.getWorkspaceId(),
                                 null,null,queued.requesterUserId()).withAgent(goal.getAgentId())
                                 .withSelectedGoalId(queued.selectedGoalId());
-                        if (!required || currentGoal.getStatus()!=vip.mate.goal.model.GoalStatus.ACTIVE
+                        if (unavailable || !required
                                 || !Objects.equals(queued.selectedGoalId(),goal.getId())
                                 || approvalRuns==null || !approvalRuns.queuedSelectionStillCurrent(queuedOrigin)) {
                             persistQueuedInput(convId,queued);

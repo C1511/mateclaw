@@ -42,6 +42,7 @@ class GoalSegmentRunnerTest {
 
     @BeforeEach void setup() {
         goal.setId(1L);goal.setConversationId("conv");goal.setAgentId(2L);goal.setWorkspaceId(3L);goal.setCreatedBy("alice");
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ACTIVE);
         ConversationEntity conv=new ConversationEntity();
         conv.setConversationId("conv");conv.setAgentId(2L);conv.setWorkspaceId(3L);conv.setUsername("alice");
         when(conversations.findByConversationId("conv")).thenReturn(conv);
@@ -260,6 +261,21 @@ class GoalSegmentRunnerTest {
         verify(agents).chatStructuredStream(eq(2L),eq("explicit unselected instruction"),
                 eq("conv"),eq("alice"),isNull(),any());
         verify(inputQueue).consume(eq(106L),anyString(),any());
+    }
+
+    @Test void terminalUnmanagedGoalDoesNotRunExplicitlyUnselectedInput() {
+        goal.setStatus(vip.mate.goal.model.GoalStatus.ABANDONED);
+        var now=LocalDateTime.now();
+        durableInputs.add(new ConversationInputQueueStore.QueuedInput(107L,"conv",2L,"alice",
+                "instruction after Goal ended",List.of(),"queued",null,null,null,
+                now,now,42L,0L));
+        when(agents.chatStructuredStream(eq(2L),anyString(),eq("conv"),eq("alice"),isNull(),any()))
+                .thenReturn(Flux.just(new AgentService.StreamDelta("incorrect execution",null)));
+
+        runner.run(goal,"continue",false);
+
+        verify(agents,never()).chatStructuredStream(any(),any(),any(),any(),any(),any());
+        verify(inputQueue).consume(eq(107L),anyString(),any());
     }
 
     @Test void workerCancellationPersistsPartialEvidenceAndReleasesAdmission() throws Exception {

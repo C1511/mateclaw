@@ -82,6 +82,7 @@ class GoalJsonHttpRuntimeIntegrationTest {
         "false,scheduled-queued-legacy,true", "true,scheduled-queued-legacy,true",
         "false,scheduled-queued-legacy-new-goal,true", "true,scheduled-queued-legacy-new-goal,true",
         "false,scheduled-queued-unselected,true", "true,scheduled-queued-unselected,true",
+        "false,scheduled-queued-terminal-unselected,true", "true,scheduled-queued-terminal-unselected,true",
         "false,scheduled-queued-paused,true", "true,scheduled-queued-paused,true", "false,recovered,true", "true,recovered,true",
         "false,scheduled,false", "true,scheduled,false", "false,recovered,false", "true,recovered,false",
         "false,queued,true", "false,reuse,true", "true,reuse,true", "false,recheck,true", "true,recheck,true",
@@ -596,6 +597,25 @@ class GoalJsonHttpRuntimeIntegrationTest {
                 runner.cancel(goal.getId());
             }
         } else if (scheduled) {
+            if (entry.equals("scheduled-queued-terminal-unselected")) {
+                var queuedInput = new vip.mate.channel.web.ConversationInputQueueStore(jdbc, json).enqueue(
+                        conversation, agentId, username, "Unselected input after Goal ended", List.of(),
+                        userId, 0L, java.time.LocalDateTime.now());
+                goals.abandon(goal.getId(), username);
+
+                SegmentOutcome outcome = runner.run(run, message, false);
+
+                assertInstanceOf(SegmentOutcome.Continue.class, outcome);
+                assertEquals(0, calls.get(), "Terminal Goal must reject queued input before model execution");
+                assertEquals("consumed", jdbc.queryForObject(
+                        "SELECT state FROM mate_conversation_input_queue WHERE id=?", String.class, queuedInput.id()));
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_message WHERE conversation_id=? AND role='user' AND content=?",
+                        Integer.class, conversation, "Unselected input after Goal ended"));
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM mate_message WHERE conversation_id=? AND role='assistant' AND content LIKE ?",
+                        Integer.class, conversation, "%was not run because its selected Goal%"));
+                assertTrue(coordinator.settle(run, outcome, java.time.LocalDateTime.now()));
+                return;
+            }
             if (entry.equals("scheduled-queued-legacy-new-goal")) {
                 goals.abandon(goal.getId(), username);
                 assertTrue(coordinator.settle(run, new SegmentOutcome.Cancelled("replaced"),
