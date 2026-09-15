@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,18 +9,18 @@ const sourceRoot = join(uiRoot, 'src')
 const allowlist = 'snowflake-precision-ok'
 
 const checks = [
-  ['v-model.number bound to an *Id field', /v-model\.number=".*[Ii]d"?/],
+  ['v-model.number bound to an *Id field', /v-model\.number\s*=\s*['"][^'"]*[Ii]d['"]/],
   ['Number()/parseInt() on an *Id value', /(Number|parseInt)\(\s*\w*[Ii]d\b/],
   ['Number()/parseInt() on an *Id member-access / lookup', /(Number|parseInt)\([^)]*(?:[a-z]Id\b|[Ii]d['"]|\.[Ii]d\b)/],
-  ['input[type="number"] bound to an *Id field', /<input\b(?=[^>]*\btype="number")(?=[^>]*\bv-model(?:\.[^=\s]+)?="[^"]*[Ii]d")/],
-  ["typeof <id> === 'number' silently drops string IDs", /typeof\s+\S*[Ii]d\b\s*===\s*'number'/],
+  ['input[type="number"] bound to an *Id field', /<input\b(?=[^>]*\btype\s*=\s*['"]number['"])(?=[^>]*\bv-model(?:\.[^=\s]+)?\s*=\s*['"][^'"]*[Ii]d['"])/],
+  ["typeof <id> === 'number' silently drops string IDs", /typeof\s+\S*[Ii]d\b\s*===\s*['"]number['"]/],
 ]
 
 function filesUnder(directory) {
   const files = []
   for (const entry of readdirSync(directory).sort()) {
     const path = join(directory, entry)
-    const stat = statSync(path)
+    const stat = lstatSync(path)
     if (stat.isDirectory()) files.push(...filesUnder(path))
     else if (stat.isFile()) files.push(path)
   }
