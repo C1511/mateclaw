@@ -82,7 +82,8 @@ class ChatControllerDurableQueueTest {
                 .thenReturn(reactor.core.publisher.Flux.never());
         var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
         when(runs.queuedSelectionStillCurrent(any())).thenReturn(true);
-        when(runs.captureSelectedGoal(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(runs.captureSelectedGoal(any())).thenAnswer(invocation ->
+                ((vip.mate.agent.context.ChatOrigin) invocation.getArgument(0)).withSelectedGoalId(7L));
         ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class), streams,
                 new ObjectMapper(), mock(ConversationCompletionPublisher.class), mock(MemoryOwnerResolver.class),
                 mock(ChatUploadLocationResolver.class), mock(OfficePreviewService.class), queue);
@@ -198,7 +199,8 @@ class ChatControllerDurableQueueTest {
         var runs = mock(vip.mate.goal.service.GoalApprovalRunService.class);
         when(runs.hasManagedGoalHistory("conv", "2")).thenReturn(true);
         when(runs.queuedSelectionStillCurrent(any())).thenReturn(true);
-        when(runs.captureSelectedGoal(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(runs.captureSelectedGoal(any())).thenAnswer(invocation ->
+                ((vip.mate.agent.context.ChatOrigin) invocation.getArgument(0)).withSelectedGoalId(7L));
         when(agents.chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any()))
                 .thenReturn(reactor.core.publisher.Flux.never());
         ChatController controller = new ChatController(agents, conversations, mock(ApprovalWorkflowService.class),
@@ -211,8 +213,11 @@ class ChatControllerDurableQueueTest {
                 new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(),
                 new java.util.concurrent.atomic.AtomicBoolean(false), "alice", "http://localhost");
 
+        var origin = org.mockito.ArgumentCaptor.forClass(vip.mate.agent.context.ChatOrigin.class);
         org.mockito.Mockito.verify(agents, org.mockito.Mockito.timeout(2000))
-                .chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), any());
+                .chatStructuredStream(eq(2L), eq("next"), eq("conv"), eq("alice"), any(), origin.capture());
+        assertThat(origin.getValue().selectedGoalId()).isZero();
+        org.mockito.Mockito.verify(runs, org.mockito.Mockito.never()).captureSelectedGoal(any());
         org.mockito.Mockito.verify(queue).consume(eq(92L), any(), any());
         org.mockito.Mockito.verify(queue).consume(eq(93L), any(), any());
     }

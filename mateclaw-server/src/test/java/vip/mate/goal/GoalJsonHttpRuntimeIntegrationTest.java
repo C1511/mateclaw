@@ -152,8 +152,8 @@ class GoalJsonHttpRuntimeIntegrationTest {
         if (!plan && entry.equals("sync") && accepted) {
             var explicitlyUnselected = ChatOrigin.web(conversation, username, 1L, null, null, userId)
                     .withAgent(agentId).withSelectedGoalId(0L);
-            assertEquals(0L, approvalRuns.captureSelectedGoal(explicitlyUnselected).selectedGoalId(),
-                    "An explicit queue snapshot must not be recaptured into a later Goal");
+            assertEquals(goal.getId(), approvalRuns.captureSelectedGoal(explicitlyUnselected).selectedGoalId(),
+                    "An ordinary in-flight request may tighten an explicit zero before approval persistence");
             assertFalse(approvalRuns.queuedSelectionStillCurrent(explicitlyUnselected),
                     "An unselected queue snapshot must become stale when a managed Goal appears");
         }

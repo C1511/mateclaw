@@ -1630,7 +1630,6 @@ public class ChatController {
                                 queuedConversation.getWorkspaceId(), null, baseUrl, preConsumedInput.requesterUserId())
                         .withOriginMessageId(queuedOriginMessageId)
                         .withSelectedGoalId(preConsumedInput.selectedGoalId());
-        queuedOrigin = captureWebGoal(queuedOrigin, agentId);
         Disposable disposable = agentService.chatStructuredStream(agentId, queuedMessage, conversationId, preConsumedInput.createdBy(), null, queuedOrigin)
                 .doOnNext(delta -> {
                     if (emitterDone.get()) return;
