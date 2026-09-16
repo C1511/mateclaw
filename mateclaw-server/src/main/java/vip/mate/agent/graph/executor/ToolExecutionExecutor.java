@@ -1793,9 +1793,11 @@ public class ToolExecutionExecutor {
     }
 
     private String invokeObserved(ToolCallback callback, String arguments, ToolContext context,
-                                  String invocationKey, String providerCallId) {
-        return executionEvidenceRecorder == null ? callback.call(arguments, context)
-                : executionEvidenceRecorder.invoke(callback, arguments, context, invocationKey, providerCallId);
+                                  String invocationKey, String providerCallId) throws TimeoutException {
+        String toolName = callback.getToolDefinition().name();
+        return ToolCallDeadline.call(toolName, getToolTimeoutMs(toolName),
+                () -> executionEvidenceRecorder == null ? callback.call(arguments, context)
+                        : executionEvidenceRecorder.invoke(callback, arguments, context, invocationKey, providerCallId));
     }
 
     // ==================== 内部数据类 ====================
