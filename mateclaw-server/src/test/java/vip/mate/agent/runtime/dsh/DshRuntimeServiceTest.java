@@ -141,7 +141,7 @@ class DshRuntimeServiceTest {
                 executable, "", "/tmp", "", "model", ""));
         return new DshRuntimeService(new ObjectMapper(),
                 Mockito.mock(ModelConfigService.class),
-                Mockito.mock(ModelProviderService.class), config);
+                Mockito.mock(ModelProviderService.class), config, new vip.mate.config.ConversationWindowProperties());
     }
 
     private static RuntimeSession session(Path workingDirectory) {

@@ -86,7 +86,11 @@ DSH_CWD=/var/lib/mateclaw/workspace
 4. 填入 DeepSeek API Key 和 Base URL。
 5. 确认至少有一个启用的 DeepSeek chat 模型。
 
-DSH 默认模型是 `deepseek-v4-flash`。如果员工没有绑定具体模型，MateClaw 会使用全局默认模型名，并从 `deepseek` 提供商注入凭证。自定义模型时，模型必须能由 DeepSeek Harness 的 DeepSeek provider route 使用。
+模型名称通过 MateClaw 模型配置解析，未指定时使用全局默认模型；未解析到模型配置时保留明确指定的模型名，连模型名也为空时才兜底为 `deepseek-v4-flash`。凭证和地址优先使用 DSH 专有设置，否则读取所选模型的提供商配置，必要时回退到 `deepseek` 提供商。自定义模型必须能由 DeepSeek Harness 的 DeepSeek provider route 使用。
+
+MateClaw 会通过 DSH SDK 的 `initialize.maxTokens` 显式传递模型最大输出 token 数，避免继承 DSH 的 256000 默认值。未配置或配置无效时使用 4096，并限制为已知上下文窗口的一半，给输入预留空间。上下文窗口优先取模型的配置，未设置时取全局会话窗口配置。例如窗口为 128000、最大输出为 8192 时发送 8192；最大输出误设为 256000 时发送 64000。
+
+这是输出上限的静态保护，不是对完整 DSH 请求的实时 token 计数。SDK 初始化协议没有直接设置上下文窗口的字段；DSH 内部上下文容量和压缩仍由其运行时/Cordis 配置管理。长工具调用历史仍可能超出窗口。若使用不支持 `initialize.maxTokens` 的旧版 DSH，请升级到支持该字段的版本。
 
 ## 创建 DSH 数字员工
 

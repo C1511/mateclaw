@@ -86,7 +86,11 @@ DSH_CWD=/var/lib/mateclaw/workspace
 4. Enter the DeepSeek API key and base URL.
 5. Confirm that at least one enabled DeepSeek chat model exists.
 
-The default DSH model is `deepseek-v4-flash`. If the employee has no explicit model, MateClaw uses the global model name and injects credentials from the `deepseek` provider. A custom model must be usable by the DeepSeek provider route in DSH.
+MateClaw resolves the model through its model configuration, using the global default when none is specified. If configuration resolution is unavailable, an explicitly requested model name is retained; `deepseek-v4-flash` is the fallback only when that name is also empty. Dedicated DSH credentials and endpoint settings take precedence; otherwise, MateClaw reads the selected model's provider configuration, falling back to the `deepseek` provider as needed. A custom model must be usable by the DeepSeek provider route in DSH.
+
+MateClaw explicitly sends the model's maximum output tokens through SDK `initialize.maxTokens`, avoiding DSH's 256000 default. An unset or invalid output cap defaults to 4096. The cap is also limited to half the known context window to reserve space for input. The model's configured window takes precedence over the global conversation window. For a 128000-token window, an 8192 output cap stays 8192; an oversized 256000 cap becomes 64000.
+
+This is a static output bound, not a live token count of the complete DSH request. SDK initialization has no direct context-window field; DSH's internal context capacity and compaction remain controlled by its runtime/Cordis configuration. Long tool histories can still exceed the window. Upgrade older DSH versions that do not support `initialize.maxTokens`.
 
 ## Create a DSH digital employee
 
