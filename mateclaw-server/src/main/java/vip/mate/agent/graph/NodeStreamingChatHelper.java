@@ -2036,9 +2036,26 @@ public class NodeStreamingChatHelper {
                 || combined.contains("model not found") || combined.contains("not_found_error")) {
             return "Model name not available on this provider — verify the model exists and is supported (Settings → Models)";
         }
+        // Do not mislabel unsupported model parameters as image errors (#640).
+        // Only emit known parameter names and fixed guidance, never raw response
+        // bodies, which may contain credentials or echoed conversation content.
+        String lowerError = combined.toLowerCase(java.util.Locale.ROOT);
+        if (lowerError.contains("unsupported parameter") || lowerError.contains("unsupported_parameter")
+                || lowerError.contains("unsupported value") || lowerError.contains("unsupported_value")) {
+            if (lowerError.contains("max_tokens") && lowerError.contains("max_completion_tokens")) {
+                return "模型不支持 max_tokens，请改用 max_completion_tokens。请更新 MateClaw，并检查模型及提供商生成参数配置。";
+            }
+            for (String parameter : java.util.List.of("max_completion_tokens", "max_tokens", "temperature", "top_p",
+                    "reasoning_effort", "stream_options", "parallel_tool_calls", "tool_choice", "response_format")) {
+                if (lowerError.contains(parameter)) {
+                    return "模型不支持生成参数或参数值：" + parameter + "。请检查模型及提供商生成参数配置。";
+                }
+            }
+            return "模型不支持当前生成参数或参数值，请检查模型及提供商生成参数配置。";
+        }
         // 对 Jackson 反序列化错误，提取关键信息
         if (msg.contains("engine_overloaded")) return "Model service overloaded, please retry later";
-        if (msg.contains("unsupported image format") || msg.contains("unsupported")) return "Unsupported file format (e.g. SVG), use PNG/JPG instead";
+        if (lowerError.contains("unsupported image format")) return "Unsupported file format (e.g. SVG), use PNG/JPG instead";
         if (msg.contains("invalid_request_error") || msg.contains("400 Bad Request")) return "Bad request, please check input";
         if (msg.contains("rate_limit") || msg.contains("429")) return "Rate limit exceeded, please retry later";
         if (msg.contains("timeout") || msg.contains("Timeout")) return "Request timeout, please retry";
