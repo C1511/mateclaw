@@ -428,6 +428,23 @@ class ReasoningNodeOutputTest {
                 "Thinking transcript must be preserved for the UI's collapse panel");
     }
 
+    @Test
+    void thinkingTokenLimit_explainsBudgetAndDoesNotRetryOrExposeReasoningAsAnswer() throws Exception {
+        var result = new NodeStreamingChatHelper.StreamResult(
+                "", "unfinished reasoning", new AssistantMessage(""), List.of(), false,
+                100, 256, true, "thinking_token_limit", NodeStreamingChatHelper.ErrorType.NONE);
+        when(streamingHelper.streamCall(any(), any(), anyString(), anyString())).thenReturn(result);
+        Map<String, Object> output = createNode().apply(buildStaleState());
+        assertControlFlagsCleared(output, "thinkingTokenLimit");
+        assertEquals("incomplete", output.get(FINISH_REASON));
+        assertEquals("unfinished reasoning", output.get(FINAL_THINKING));
+        String answer = (String) output.get(FINAL_ANSWER);
+        assertTrue(answer.contains("token 预算"));
+        assertTrue(answer.contains("关闭思考"));
+        assertFalse(answer.contains("unfinished reasoning"));
+        verify(streamingHelper, times(1)).streamCall(any(), any(), anyString(), anyString());
+    }
+
     // ===== CancellationException (no content stop) =====
 
     @Test

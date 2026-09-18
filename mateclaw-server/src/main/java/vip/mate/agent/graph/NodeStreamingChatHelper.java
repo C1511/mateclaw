@@ -1177,6 +1177,7 @@ public class NodeStreamingChatHelper {
         List<ToolCallAccumulator> toolCallAccumulators = new ArrayList<>();
         AtomicReference<AssistantMessage> lastAssistantMessage = new AtomicReference<>();
         AtomicReference<Throwable> errorRef = new AtomicReference<>();
+        AtomicReference<String> finishReason = new AtomicReference<>();
         AtomicInteger promptTokens = new AtomicInteger(0);
         AtomicInteger completionTokens = new AtomicInteger(0);
         // Prompt cache / reasoning counters; providers that don't report them stay 0.
@@ -1292,6 +1293,11 @@ public class NodeStreamingChatHelper {
                         return;
                     }
                     var generation = chatResponse.getResult();
+                    if (generation.getMetadata() != null
+                            && generation.getMetadata().getFinishReason() != null
+                            && !generation.getMetadata().getFinishReason().isBlank()) {
+                        finishReason.set(generation.getMetadata().getFinishReason());
+                    }
                     AssistantMessage msg = generation.getOutput();
                     lastAssistantMessage.set(msg);
 
@@ -1580,7 +1586,10 @@ public class NodeStreamingChatHelper {
         // ===== 成功（检查是否因 thinking-only 软上限或内容重复被截断） =====
         boolean truncatedByThinkingCap = thinkingOnlyCapTriggered.get();
         boolean truncatedByContentRepeat = contentRepeatCapTriggered.get();
-        boolean truncated = truncatedByThinkingCap || truncatedByContentRepeat;
+        boolean thinkingTokenLimit = "length".equalsIgnoreCase(finishReason.get())
+                && thinkingAccum.length() > 0 && contentAccum.toString().isBlank()
+                && toolCallAccumulators.isEmpty();
+        boolean truncated = truncatedByThinkingCap || truncatedByContentRepeat || thinkingTokenLimit;
         if (truncatedByThinkingCap) {
             log.warn("[{}] LLM stream disposed: thinking-only soft cap reached for conversation {}",
                     phase, conversationId);
@@ -1609,6 +1618,7 @@ public class NodeStreamingChatHelper {
 
         String truncationReason = truncatedByThinkingCap ? "thinking_only_no_content"
                 : truncatedByContentRepeat ? "content_repetition"
+                : thinkingTokenLimit ? "thinking_token_limit"
                 : null;
         return assembleResult(contentAccum, thinkingAccum, toolCallAccumulators,
                 promptTokens.get(), completionTokens.get(),

@@ -1160,21 +1160,20 @@ public class ReasoningNode implements NodeAction {
         // soft cap would be re-promoted to ERROR_FALLBACK and we'd lose the
         // INCOMPLETE semantics.
 
-        if (result.partial() && "thinking_only_no_content".equals(result.errorMessage())) {
-            // Soft thinking-only loop: the helper disposed the upstream stream
-            // because the model accumulated >= THINKING_ONLY_HARD_CAP_CHARS of
-            // reasoning_content without emitting any visible content or tool
-            // calls. Treat as INCOMPLETE rather than fatal — the thinking text
-            // has already been streamed and is preserved for the UI's collapse
-            // panel; the user gets a short fallback line they can retry from.
+        if (result.partial() && ("thinking_only_no_content".equals(result.errorMessage())
+                || "thinking_token_limit".equals(result.errorMessage()))) {
+            // Either our thinking-only cap or the provider's output-token budget
+            // ended reasoning before any answer/tool call. Preserve the transcript
+            // and surface INCOMPLETE rather than retrying a supposed empty response.
             String partialThinking = result.thinking() != null ? result.thinking() : "";
-            log.warn("[ReasoningNode] Thinking-only soft cap hit ({} thinking chars, no content/tools); " +
-                            "INCOMPLETE",
-                    partialThinking.length());
+            log.warn("[ReasoningNode] Thinking-only turn ended: {} ({} thinking chars); INCOMPLETE",
+                    result.errorMessage(), partialThinking.length());
             var builder = reasonOutput()
                     .needsToolCall(false)
                     .shouldSummarize(false)
-                    .finalAnswer("（模型在思考阶段停留过久且未给出最终答案，请重试或拆分问题。）")
+                    .finalAnswer("thinking_token_limit".equals(result.errorMessage())
+                            ? "（模型在输出最终答案前已耗尽输出 token 预算。请关闭思考、适当增加模型最大输出 token 数，或拆分问题后重试。）"
+                            : "（模型在思考阶段停留过久且未给出最终答案，请重试或拆分问题。）")
                     .llmCallCount(nextLlmCallCount)
                     .finishReason(FinishReason.INCOMPLETE)
                     .contentStreamed(false)
