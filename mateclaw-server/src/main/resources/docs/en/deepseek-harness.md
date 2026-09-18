@@ -126,7 +126,9 @@ Success means:
 - The UI does not show “no output for this run”.
 - The same conversation is not used to start two different DSH live sessions.
 
-Do not reuse a completed test `conversationId` for a new DSH live session. DSH detects a mismatch between the persisted session log and the new live session and reports `id collision`. Use **New conversation** for every fresh runtime test.
+You can continue chatting in the same MateClaw conversation. Each turn uses a fresh DSH process and runtime session ID to avoid persisted-log `id collision`. MateClaw supplies up to 40 recent completed user/assistant text messages from that conversation, within a 4096 estimated-token history budget. The current message is sent once and is not truncated by this history budget. Older history may be omitted and a boundary message may be marked `[truncated]`. Saved text history remains available after a backend restart; internal DSH tool state is not restored. Scheduled tasks do not replay conversation history.
+
+To verify multi-turn context, send “My name is Alex”, then “What is my name?” in the same conversation. A new conversation must not inherit that information through this history mechanism.
 
 ## Logs and diagnostics
 
