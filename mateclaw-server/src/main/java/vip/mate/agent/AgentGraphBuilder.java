@@ -182,6 +182,14 @@ public class AgentGraphBuilder {
      */
     private vip.mate.audit.service.AuditEventService auditEventService;
 
+    private vip.mate.config.ChannelHistoryProperties channelHistoryProperties =
+            new vip.mate.config.ChannelHistoryProperties();
+
+    @Autowired
+    public void setChannelHistoryProperties(vip.mate.config.ChannelHistoryProperties properties) {
+        this.channelHistoryProperties = properties;
+    }
+
     @Autowired(required = false)
     public void setAuditEventService(vip.mate.audit.service.AuditEventService s) {
         this.auditEventService = s;
@@ -506,6 +514,7 @@ public class AgentGraphBuilder {
         agent.agentId = String.valueOf(entity.getId());
         agent.agentName = entity.getName();
         agent.systemPrompt = enhancedPrompt;
+        agent.channelHistoryPolicy = new vip.mate.agent.context.ChannelHistoryPolicy(channelHistoryProperties);
         agent.maxIterations = maxIter;
         agent.modelName = runtimeModel.getModelName();
         agent.modelCapabilities = modelCapabilityService.resolve(

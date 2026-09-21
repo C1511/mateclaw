@@ -59,6 +59,9 @@ public abstract class BaseAgent {
     /** 系统提示词 */
     protected String systemPrompt;
 
+    protected vip.mate.agent.context.ChannelHistoryPolicy channelHistoryPolicy =
+            new vip.mate.agent.context.ChannelHistoryPolicy(new vip.mate.config.ChannelHistoryProperties());
+
     /**
      * Max ReAct iterations (one reasoning + action + observation step counts as one).
      * Default 150, hard ceiling 150 (enforced in AgentGraphBuilder so per-agent DB
@@ -258,6 +261,8 @@ public abstract class BaseAgent {
         // The gate is an explicit ChatOrigin signal, so a normal Web or
         // channel turn can never take this path.
         ChatOrigin chatOrigin = ChatOriginHolder.get();
+        boolean channelHistory = channelHistoryPolicy.applies(chatOrigin);
+        java.time.LocalDateTime historyNow = java.time.LocalDateTime.now();
         if (chatOrigin != null && chatOrigin.cronOrigin()) {
             log.info("[{}] Scheduled-job run: LLM context isolated (no conversation history replayed)",
                     agentName);
@@ -267,7 +272,7 @@ public abstract class BaseAgent {
         // ===== 两阶段加载：短对话全量，长对话分页（递进式） =====
         long totalCount = conversationService.countMessages(conversationId);
         if (totalCount <= 0) {
-            return List.of();
+            return channelHistory ? List.of(new SystemMessage(channelHistoryPolicy.guidance(historyNow))) : List.of();
         }
 
         int windowSize = getEffectiveWindowSize();
@@ -292,7 +297,7 @@ public abstract class BaseAgent {
         boolean boundaryFoundInWindow = false;
         for (int i = history.size() - 1; i >= 0; i--) {
             MessageEntity msg = history.get(i);
-            if ("system".equals(msg.getRole()) && isCompressionSummary(msg)) {
+            if (!channelHistory && "system".equals(msg.getRole()) && isCompressionSummary(msg)) {
                 history = new ArrayList<>(history.subList(i, history.size()));
                 boundaryFoundInWindow = true;
                 log.info("[{}] Found latest compression boundary at index {}; loading {} messages forward",
@@ -308,7 +313,7 @@ public abstract class BaseAgent {
         // original list and never made it into `history`. Without prepending
         // it, the model would forget the original goal even though we already
         // paid the LLM cost to produce a structured summary.
-        if (!boundaryFoundInWindow && totalCount > windowSize) {
+        if (!channelHistory && !boundaryFoundInWindow && totalCount > windowSize) {
             try {
                 MessageEntity latestBoundary = conversationService.findLatestCompressionBoundary(conversationId);
                 if (latestBoundary != null) {
@@ -332,11 +337,17 @@ public abstract class BaseAgent {
             }
         }
 
+        if (channelHistory) {
+            history = channelHistoryPolicy.select(history.subList(0, limit), historyNow);
+            limit = history.size();
+        }
+
         if (limit <= 0) {
-            return List.of();
+            return channelHistory ? List.of(new SystemMessage(channelHistoryPolicy.guidance(historyNow))) : List.of();
         }
 
         List<Message> messages = new ArrayList<>(limit);
+        if (channelHistory) messages.add(new SystemMessage(channelHistoryPolicy.guidance(historyNow)));
         for (int i = 0; i < limit; i += 1) {
             messages.addAll(expandToSpringMessages(history.get(i)));
         }
@@ -894,6 +905,9 @@ public abstract class BaseAgent {
                 renderedContent = directToolHistoryPlaceholder(directNames);
             }
         }
+        if (channelHistoryPolicy.applies(ChatOriginHolder.get()) && message.getCreateTime() != null) {
+            renderedContent = "[Historical message at " + message.getCreateTime() + "]\n" + renderedContent;
+        }
         return switch (message.getRole()) {
             case "assistant" -> new AssistantMessage(renderedContent);
             case "system" -> isCompressionSummary(message)
@@ -1330,6 +1344,8 @@ public abstract class BaseAgent {
             for (int j = currentIdx - 1; j >= from; j--) {
                 MessageEntity m = history.get(j);
                 if (m == null || !"user".equals(m.getRole())) continue;
+                if (channelHistoryPolicy.applies(ChatOriginHolder.get())
+                        && !channelHistoryPolicy.isHot(m, java.time.LocalDateTime.now())) continue;
                 List<MessageContentPart> parts = conversationService.parseMessageParts(m);
                 for (int k = parts.size() - 1; k >= 0; k--) {
                     MessageContentPart part = parts.get(k);

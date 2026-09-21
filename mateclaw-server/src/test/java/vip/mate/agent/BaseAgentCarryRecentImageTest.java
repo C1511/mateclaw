@@ -27,6 +27,32 @@ import static org.mockito.Mockito.when;
 class BaseAgentCarryRecentImageTest {
 
     @Test
+    void channelDoesNotCarryExpiredReportButStillCarriesHotImage() throws Exception {
+        Path img = Files.createTempFile("carry-channel-report", ".jpg");
+        Files.write(img, new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0x00});
+        try {
+            vip.mate.agent.context.ChatOriginHolder.set(vip.mate.agent.context.ChatOrigin.EMPTY
+                    .withSender("u", "feishu", null));
+            TestAgent agent = visionAgent();
+            MessageEntity report = userMsg("库存报表");
+            report.setCreateTime(java.time.LocalDateTime.now().minusHours(2));
+            MessageEntity current = userMsg("现在库存多少");
+            when(agent.conversationService.listMessages("c1")).thenReturn(List.of(report, current));
+            when(agent.conversationService.renderMessageContent(current)).thenReturn("现在库存多少");
+            when(agent.conversationService.parseMessageParts(report))
+                    .thenReturn(List.of(imagePart(img.toAbsolutePath().toString())));
+            when(agent.conversationService.parseMessageParts(current)).thenReturn(List.of());
+            UserMessage expired = agent.callBuildCurrent("c1", "现在库存多少");
+            assertTrue(expired.getMedia() == null || expired.getMedia().isEmpty());
+            report.setCreateTime(java.time.LocalDateTime.now().minusMinutes(1));
+            assertTrue(agent.callBuildCurrent("c1", "现在库存多少").getMedia().size() == 1);
+        } finally {
+            vip.mate.agent.context.ChatOriginHolder.clear();
+            Files.deleteIfExists(img);
+        }
+    }
+
+    @Test
     @DisplayName("Vision model + follow-up with no image → most recent image is carried into the turn")
     void followUp_carriesRecentImage() throws Exception {
         Path img = Files.createTempFile("carry-test", ".jpg");

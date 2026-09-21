@@ -122,4 +122,40 @@ class DshConversationHistoryTest {
         jdbc.update("INSERT INTO mate_message(id,conversation_id,role,content,status) VALUES(?,?,?,?,?)",
                 id, conversation, role, content, status);
     }
+
+    @Test
+    void channelHistoryExpiresAnswersButKeepsWarmQuestionAndHotDialogue() {
+        row(1, "a", "user", "cold question", "completed");
+        row(2, "a", "user", "查询华北库存", "completed");
+        row(3, "a", "assistant", "stale inventory 98765", "completed");
+        row(4, "a", "user", "按仓库分组", "completed");
+        row(5, "a", "assistant", "recent answer", "completed");
+        row(6, "a", "user", "current question", "completed");
+        jdbc.update("UPDATE mate_message SET create_time=? WHERE id=1", java.time.LocalDateTime.now().minusDays(2));
+        jdbc.update("UPDATE mate_message SET create_time=? WHERE id IN (2,3)", java.time.LocalDateTime.now().minusHours(2));
+        ChatOrigin channel = ChatOrigin.EMPTY.withSender("u", "weixin", null).withOriginMessageId(6L);
+        String prompt = history.enrich("a", "current question", "current enriched", channel);
+        assertFalse(prompt.contains("cold question"));
+        assertFalse(prompt.contains("98765"));
+        assertFalse(prompt.contains("current question"));
+        assertTrue(prompt.contains("查询华北库存"));
+        assertTrue(prompt.contains("recent answer"));
+        assertTrue(prompt.contains("query the authoritative source in this turn"));
+        assertTrue(prompt.endsWith("current enriched"));
+        assertEquals("stale inventory 98765", jdbc.queryForObject("SELECT content FROM mate_message WHERE id=3", String.class));
+        // Web replay remains compatible, including older text.
+        assertTrue(history.enrich("a", "current question", "current", ChatOrigin.EMPTY).contains("98765"));
+    }
+
+    @Test
+    void channelWithoutOriginIdDeduplicatesBeforeWarmProjectionAndGuidesEmptyHistory() {
+        row(1, "a", "user", "current", "completed");
+        jdbc.update("UPDATE mate_message SET create_time=?", java.time.LocalDateTime.now().minusHours(2));
+        ChatOrigin channel = ChatOrigin.EMPTY.withSender("u", "feishu", null);
+        String prompt = history.enrich("a", "current", "explicit question", channel);
+        assertFalse(prompt.contains("Historical request"));
+        assertTrue(prompt.contains("freshness"));
+        assertTrue(prompt.endsWith("explicit question"));
+        assertTrue(history.enrich("empty", "query", "query", channel).contains("freshness"));
+    }
 }
