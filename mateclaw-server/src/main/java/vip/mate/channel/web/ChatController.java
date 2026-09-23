@@ -1,5 +1,6 @@
 package vip.mate.channel.web;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -1222,10 +1223,20 @@ public class ChatController {
 
     @Operation(summary = "上传聊天附件")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public R<ChatUploadResponse> upload(
+    public R<ChatUploadResponse> uploadInWorkspace(
             @RequestParam String conversationId,
             @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
             Authentication auth) throws IOException {
+        return uploadForWorkspace(conversationId, file, workspaceId, auth);
+    }
+
+    public R<ChatUploadResponse> upload(String conversationId, MultipartFile file, Authentication auth) throws IOException {
+        return uploadForWorkspace(conversationId, file, null, auth);
+    }
+
+    private R<ChatUploadResponse> uploadForWorkspace(String conversationId, MultipartFile file,
+            Long workspaceId, Authentication auth) throws IOException {
 
         String username = auth != null ? auth.getName() : "anonymous";
         // 校验会话归属（会话可能尚未创建，此时允许上传——后续 stream/chat 会创建并绑定用户）。
@@ -1242,14 +1253,23 @@ public class ChatController {
         String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "file";
         String safeFilename = Path.of(originalFilename).getFileName().toString().replaceAll("[^a-zA-Z0-9._-]", "_");
         String storedName = System.currentTimeMillis() + "_" + safeFilename;
-        Path uploadRoot = uploadLocationResolver.resolveUploadRoot(conversationId);
+        var uploadOrigin = vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                workspaceId != null ? workspaceId : (conversationService.conversationExists(conversationId) ? null : 1L),
+                null, null, requesterUserIdOf(auth));
+        Path uploadRoot = MemberFileIsolation.isEnabled() ? uploadLocationResolver.resolveUploadRoot(uploadOrigin)
+                : uploadLocationResolver.resolveUploadRoot(conversationId);
         // resolveWriteDir sanitizes the id (IM-channel ids like "wecom:XXXX"
         // carry a ':' illegal on Windows) and appends the per-day sub-directory
         // when date folders are enabled. Reads probe both layouts.
-        Path writeDir = uploadLocationResolver.resolveWriteDir(conversationId);
-        Files.createDirectories(writeDir);
+        Path writeDir = MemberFileIsolation.isEnabled() ? uploadLocationResolver.resolveWriteDir(uploadOrigin)
+                : uploadLocationResolver.resolveWriteDir(conversationId);
         Path target = writeDir.resolve(storedName);
-        file.transferTo(target);
+        if (MemberFileIsolation.isEnabled()) {
+            vip.mate.workspace.core.service.MemberFileAccess.write(uploadRoot.getParent(), target, file.getBytes(), false);
+        } else {
+            Files.createDirectories(writeDir);
+            file.transferTo(target);
+        }
 
         log.info("Chat attachment uploaded: conversationId={}, user={}, file={}", conversationId, username, target);
 
@@ -1278,12 +1298,25 @@ public class ChatController {
             return ResponseEntity.status(403).build();
         }
 
-        Path filePath = resolveUploadedFile(conversationId, storedName);
+        if (MemberFileIsolation.isEnabled()) {
+            try {
+                MemberFileIsolation.scope(vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                        null, null, null, requesterUserIdOf(auth)));
+            } catch (SecurityException e) { return ResponseEntity.status(403).build(); }
+        }
+        Path filePath = MemberFileIsolation.isEnabled()
+                ? uploadLocationResolver.resolveExistingFile(vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                        null, null, null, requesterUserIdOf(auth)), storedName)
+                : resolveUploadedFile(conversationId, storedName);
         if (filePath == null) {
             return ResponseEntity.notFound().build();
         }
 
-        Resource resource = new FileSystemResource(filePath);
+        Resource resource = MemberFileIsolation.isEnabled()
+                ? new org.springframework.core.io.ByteArrayResource(vip.mate.workspace.core.service.MemberFileAccess.read(
+                        Path.of(MemberFileIsolation.scope(vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                                null, null, null, requesterUserIdOf(auth))).workspaceBasePath()), filePath, 32 * 1024 * 1024))
+                : new FileSystemResource(filePath);
         String contentType = Files.probeContentType(filePath);
         // probeContentType 在部分平台不识别视频格式，通过扩展名 fallback
         if (contentType == null) {
@@ -1318,6 +1351,8 @@ public class ChatController {
             return ResponseEntity.status(403).build();
         }
 
+        // Office converters execute outside the isolated runtime; do not launch them in strict mode.
+        if (MemberFileIsolation.isEnabled()) return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
         // 415: the client asked to preview a format this endpoint won't convert.
         if (!officePreviewService.isConvertible(storedName)) {
             return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).build();
@@ -1327,7 +1362,16 @@ public class ChatController {
             return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).build();
         }
 
-        Path filePath = resolveUploadedFile(conversationId, storedName);
+        if (MemberFileIsolation.isEnabled()) {
+            try {
+                MemberFileIsolation.scope(vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                        null, null, null, requesterUserIdOf(auth)));
+            } catch (SecurityException e) { return ResponseEntity.status(403).build(); }
+        }
+        Path filePath = MemberFileIsolation.isEnabled()
+                ? uploadLocationResolver.resolveExistingFile(vip.mate.agent.context.ChatOrigin.web(conversationId, username,
+                        null, null, null, requesterUserIdOf(auth)), storedName)
+                : resolveUploadedFile(conversationId, storedName);
         if (filePath == null) {
             return ResponseEntity.notFound().build();
         }

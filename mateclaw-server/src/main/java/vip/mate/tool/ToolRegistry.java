@@ -10,6 +10,13 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import vip.mate.tool.model.ToolEntity;
 import vip.mate.tool.repository.ToolMapper;
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.tool.builtin.ReadFileTool;
+import vip.mate.tool.builtin.WriteFileTool;
+import vip.mate.tool.builtin.AppendFileTool;
+import vip.mate.tool.builtin.EditFileTool;
+import vip.mate.tool.builtin.ShellExecuteTool;
+import vip.mate.tool.builtin.CodeExecuteTool;
 
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -53,7 +60,12 @@ public class ToolRegistry {
     private final CopyOnWriteArrayList<PluginToolEntry> pluginTools = new CopyOnWriteArrayList<>();
 
     private final Object enabledToolSetLock = new Object();
-    private volatile AgentToolSet enabledToolSetCache;
+    private record CachedToolSet(AgentToolSet tools, boolean isolated) { }
+    private volatile CachedToolSet enabledToolSetCache;
+    // Exact classes only: a same-name method, provider callback, or subclass is not audited.
+    private static final Set<Class<?>> MEMBER_ISOLATED_BEANS = Set.of(
+            ReadFileTool.class, WriteFileTool.class, AppendFileTool.class,
+            EditFileTool.class, ShellExecuteTool.class, CodeExecuteTool.class);
 
     /** A tool entry registered by a plugin */
     public record PluginToolEntry(ToolCallback callback, Supplier<Boolean> availabilityCheck) {}
@@ -83,6 +95,7 @@ public class ToolRegistry {
      * through the same {@code mate_agent_tool.tool_name} path as other tools.
      */
     public List<ToolCallback> listAvailablePluginTools() {
+        if (MemberFileIsolation.isEnabled()) return List.of();
         List<ToolCallback> out = new ArrayList<>();
         for (PluginToolEntry entry : pluginTools) {
             try {
@@ -174,6 +187,9 @@ public class ToolRegistry {
         for (Map.Entry<String, Object> entry : beans.entrySet()) {
             String beanName = entry.getKey();
             Object bean = entry.getValue();
+            if (enabledOnly && MemberFileIsolation.isEnabled() && !MEMBER_ISOLATED_BEANS.contains(bean.getClass())) {
+                continue;
+            }
 
             boolean hasToolMethod = java.util.Arrays.stream(bean.getClass().getMethods())
                     .anyMatch(m -> m.isAnnotationPresent(Tool.class));
@@ -281,17 +297,18 @@ public class ToolRegistry {
      * 2. 当前容器中所有 ToolCallbackProvider（MCP server 等）
      */
     public AgentToolSet getEnabledToolSet() {
-        AgentToolSet cached = enabledToolSetCache;
-        if (cached != null) {
-            return cached;
+        CachedToolSet cached = enabledToolSetCache;
+        if (cached != null && cached.isolated() == MemberFileIsolation.isEnabled()) {
+            return cached.tools();
         }
         synchronized (enabledToolSetLock) {
             cached = enabledToolSetCache;
-            if (cached != null) {
-                return cached;
+            if (cached != null && cached.isolated() == MemberFileIsolation.isEnabled()) {
+                return cached.tools();
             }
+            boolean isolated = MemberFileIsolation.isEnabled();
             AgentToolSet built = buildEnabledToolSet();
-            enabledToolSetCache = built;
+            enabledToolSetCache = new CachedToolSet(built, isolated);
             return built;
         }
     }
@@ -307,7 +324,8 @@ public class ToolRegistry {
             nameByBean.put(e.getValue(), e.getKey());
         }
 
-        Map<String, ToolCallbackProvider> providerBeans = applicationContext.getBeansOfType(ToolCallbackProvider.class);
+        Map<String, ToolCallbackProvider> providerBeans = MemberFileIsolation.isEnabled()
+                ? Map.of() : applicationContext.getBeansOfType(ToolCallbackProvider.class);
         List<ToolCallbackProvider> providers = new ArrayList<>(providerBeans.values());
 
         // 对内置工具 callback 应用 i18n 描述包装
@@ -340,7 +358,7 @@ public class ToolRegistry {
 
         // Plugin tool callbacks — evaluate availability checks lazily
         int pluginToolCount = 0;
-        for (PluginToolEntry entry : pluginTools) {
+        for (PluginToolEntry entry : MemberFileIsolation.isEnabled() ? List.<PluginToolEntry>of() : pluginTools) {
             try {
                 if (Boolean.TRUE.equals(entry.availabilityCheck().get())) {
                     localizedCallbacks.add(entry.callback());

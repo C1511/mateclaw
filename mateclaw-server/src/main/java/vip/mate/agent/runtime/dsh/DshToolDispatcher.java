@@ -1,5 +1,6 @@
 package vip.mate.agent.runtime.dsh;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import org.springframework.ai.tool.ToolCallback;
 
 import java.nio.file.Path;
@@ -28,6 +29,7 @@ public final class DshToolDispatcher {
     }
 
     public DshToolDispatchResult dispatch(String toolName, String argumentsJson, Path targetPath) {
+        if (MemberFileIsolation.isEnabled()) return DshToolDispatchResult.denied("DSH tools do not support member file isolation");
         ToolCallback callback = callbacks.get(toolName);
         if (callback == null) return DshToolDispatchResult.denied("unknown tool");
         DshToolDecision decision = policyEvaluator.decide(policy, toolName, targetPath);

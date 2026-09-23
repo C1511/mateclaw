@@ -1,5 +1,6 @@
 package vip.mate.agent.graph.executor;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -493,6 +494,8 @@ public class ToolExecutionExecutor {
         if (isBlank(safeOrigin.workspaceBasePath()) && !isBlank(workspaceBasePath)) {
             safeOrigin = safeOrigin.withWorkspace(safeOrigin.workspaceId(), workspaceBasePath);
         }
+        safeOrigin = MemberFileIsolation.scope(safeOrigin);
+        if (MemberFileIsolation.isEnabled()) workspaceBasePath = safeOrigin.workspaceBasePath();
         // Reset per-turn audit dedupe state. A retried denied tool inside the
         // same turn writes a single audit row; the set is repopulated by the
         // denial branch below.
@@ -579,6 +582,12 @@ public class ToolExecutionExecutor {
             // bypass guard rules keyed on the canonical name.
             String toolName = resolveToolName(toolCall.name());
             String arguments = toolCall.arguments();
+            try { MemberFileIsolation.requireAuditedTool(toolName); }
+            catch (SecurityException denied) {
+                allResponses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), responseName, denied.getMessage()));
+                events.add(GraphEventPublisher.toolComplete(toolCall.id(), toolName, denied.getMessage(), false));
+                continue;
+            }
 
             events.add(GraphEventPublisher.toolStart(toolCall.id(), toolName, arguments));
 
@@ -805,6 +814,7 @@ public class ToolExecutionExecutor {
             String conversationId, String workspaceBasePath,
             List<DirectToolOutput> directOutputs, ChatOrigin origin) {
         String toolName = resolveToolName(toolCall.name());
+        MemberFileIsolation.requireAuditedTool(toolName);
         String callArguments = storedArguments != null ? storedArguments : toolCall.arguments();
 
         ToolCallback callback = toolCallbackMap.get(toolName);
@@ -842,6 +852,8 @@ public class ToolExecutionExecutor {
             ChatOrigin replayOrigin = (origin == null ? ChatOrigin.EMPTY : origin)
                     .withConversationId(conversationId);
             replayOrigin = replayOrigin.withWorkspace(replayOrigin.workspaceId(), workspaceBasePath);
+            replayOrigin = MemberFileIsolation.scope(replayOrigin);
+            if (MemberFileIsolation.isEnabled()) workspaceBasePath = replayOrigin.workspaceBasePath();
             String result = invokeObserved(callback, callArguments, toolContextWithScopedCatalog(replayOrigin),
                     UUID.randomUUID().toString(), toolCall.id());
             throwIfStopRequested(conversationId);
@@ -1645,6 +1657,7 @@ public class ToolExecutionExecutor {
      * to the usual {@code skillAwareNotFoundMessage} hint.
      */
     private SkillRedirect tryAutoRedirectSkillCall(String toolName, String originalArgs, ChatOrigin origin) {
+        if (MemberFileIsolation.isEnabled()) return null;
         if (skillRuntimeService == null || toolName == null || toolName.isBlank()) return null;
         try {
             // Scope to the conversation's workspace so an agent is never redirected
@@ -1795,9 +1808,20 @@ public class ToolExecutionExecutor {
     private String invokeObserved(ToolCallback callback, String arguments, ToolContext context,
                                   String invocationKey, String providerCallId) throws TimeoutException {
         String toolName = callback.getToolDefinition().name();
-        return ToolCallDeadline.call(toolName, getToolTimeoutMs(toolName),
-                () -> executionEvidenceRecorder == null ? callback.call(arguments, context)
-                        : executionEvidenceRecorder.invoke(callback, arguments, context, invocationKey, providerCallId));
+        MemberFileIsolation.requireAuditedTool(toolName);
+        ChatOrigin scoped = MemberFileIsolation.scope(ChatOrigin.from(context));
+        java.util.Map<String, Object> values = new java.util.HashMap<>(context.getContext());
+        values.put(ChatOrigin.CTX_KEY, scoped);
+        ToolContext scopedContext = new ToolContext(values);
+        return ToolCallDeadline.call(toolName, getToolTimeoutMs(toolName), () -> {
+            // Deadlines may use another thread; install the identity inside the callback.
+            ToolExecutionContext.set(scoped.conversationId(), scoped.requesterId(), scoped.workspaceBasePath());
+            ToolExecutionContext.setOrigin(scoped);
+            try {
+                return executionEvidenceRecorder == null ? callback.call(arguments, scopedContext)
+                        : executionEvidenceRecorder.invoke(callback, arguments, scopedContext, invocationKey, providerCallId);
+            } finally { ToolExecutionContext.clear(); }
+        });
     }
 
     // ==================== 内部数据类 ====================

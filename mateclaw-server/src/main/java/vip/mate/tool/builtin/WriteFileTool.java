@@ -1,5 +1,7 @@
 package vip.mate.tool.builtin;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.workspace.core.service.MemberFileAccess;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -71,7 +73,7 @@ public class WriteFileTool {
 
             // 自动创建父目录
             Path parent = path.getParent();
-            if (parent != null && !Files.exists(parent)) {
+            if (!MemberFileIsolation.isEnabled() && parent != null && !Files.exists(parent)) {
                 Files.createDirectories(parent);
                 log.info("[WriteFile] Created parent directories: {}", parent);
             }
@@ -80,7 +82,8 @@ public class WriteFileTool {
 
             // 写入文件
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-            Files.write(path, bytes);
+            if (MemberFileIsolation.isEnabled()) MemberFileAccess.write(MemberFileIsolation.root(ctx), path, bytes, false);
+            else Files.write(path, bytes);
 
             result.set("bytesWritten", bytes.length);
             result.set("created", !existed);

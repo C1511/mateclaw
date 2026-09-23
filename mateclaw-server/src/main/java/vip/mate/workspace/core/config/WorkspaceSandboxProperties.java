@@ -27,6 +27,9 @@ public class WorkspaceSandboxProperties {
      */
     private boolean enabled = true;
 
+    /** Opt-in strict member storage and container execution; existing deployments retain legacy paths. */
+    private boolean memberIsolationEnabled = false;
+
     /**
      * Global fallback sandbox root, used when no per-workspace base path is set.
      * Defaults to {@code <working dir>/data/workspace}, alongside the H2 data

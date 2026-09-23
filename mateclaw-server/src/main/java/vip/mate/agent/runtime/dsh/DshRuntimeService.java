@@ -165,6 +165,9 @@ public class DshRuntimeService implements AgentRuntimeProvider {
 
     @Override
     public AgentRuntimeConnection start(RuntimeSession session) {
+        if (vip.mate.workspace.core.service.MemberFileIsolation.isEnabled()) {
+            throw new SecurityException("DSH runtime is unavailable in member file isolation mode");
+        }
         RuntimeValidation validation = validate(session);
         if (!validation.valid()) {
             throw new IllegalArgumentException(validation.code() + ": " + validation.message());
@@ -232,6 +235,9 @@ public class DshRuntimeService implements AgentRuntimeProvider {
                                                    Path workingDirectory,
                                                    AtomicReference<Process> processRef,
                                                    AtomicReference<RuntimeContextUsage> latestUsage) {
+        if (vip.mate.workspace.core.service.MemberFileIsolation.isEnabled()) {
+            return Flux.error(new SecurityException("DSH runtime is unavailable in member file isolation mode"));
+        }
         return Flux.<AgentService.StreamDelta>create(sink -> {
             Process process = null;
             try {

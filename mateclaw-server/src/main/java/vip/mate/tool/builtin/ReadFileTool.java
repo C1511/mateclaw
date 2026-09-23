@@ -1,5 +1,7 @@
 package vip.mate.tool.builtin;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.workspace.core.service.MemberFileAccess;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -112,7 +114,9 @@ public class ReadFileTool {
             }
 
             // 读取所有行
-            List<String> allLines = readLinesUtf8(path);
+            List<String> allLines = MemberFileIsolation.isEnabled()
+                    ? new String(MemberFileAccess.read(MemberFileIsolation.root(ctx), path, 32 * 1024 * 1024), StandardCharsets.UTF_8).lines().toList()
+                    : readLinesUtf8(path);
             int totalLines = allLines.size();
             result.set("totalLines", totalLines);
 

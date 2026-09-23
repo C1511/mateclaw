@@ -1,6 +1,7 @@
 package vip.mate.tool.guard;
 
 import lombok.extern.slf4j.Slf4j;
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.lang.Nullable;
 import vip.mate.agent.context.ChatOrigin;
@@ -204,6 +205,7 @@ public final class WorkspacePathGuard {
      * transition window.
      */
     public static Path validatePath(String rawPath, @Nullable ToolContext ctx) {
+        if (MemberFileIsolation.isEnabled()) return MemberFileIsolation.validate(MemberFileIsolation.root(ctx), rawPath);
         String basePath = resolveBasePath(ctx);
         if (basePath == null || basePath.isBlank()) {
             // 未配置活动目录，不限制。此时相对路径仍按进程 CWD 解析（遗留行为）。
@@ -607,6 +609,7 @@ public final class WorkspacePathGuard {
      * </ol>
      */
     private static String resolveBasePath(@Nullable ToolContext ctx) {
+        if (MemberFileIsolation.isEnabled()) return MemberFileIsolation.root(ctx).toString();
         if (ctx != null) {
             ChatOrigin origin = ChatOrigin.from(ctx);
             if (origin.workspaceBasePath() != null && !origin.workspaceBasePath().isBlank()) {

@@ -182,6 +182,13 @@ public record ChatOrigin(
                 executionAttribution, selectedGoalId);
     }
 
+    /** Carry a user identity recovered from trusted persisted conversation ownership. */
+    public ChatOrigin withRequesterUserId(Long userId) {
+        return new ChatOrigin(agentId, conversationId, requesterId, workspaceId, workspaceBasePath,
+                channelId, channelTarget, cronOrigin, senderName, channelType, chatId, baseUrl,
+                userId, originMessageId, executionAttribution, selectedGoalId);
+    }
+
     public ChatOrigin withWorkspace(@Nullable Long newWorkspaceId,
                                     @Nullable String newWorkspaceBasePath) {
         return new ChatOrigin(agentId, conversationId, requesterId,

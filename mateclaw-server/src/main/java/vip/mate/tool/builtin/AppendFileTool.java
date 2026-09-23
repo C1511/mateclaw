@@ -1,5 +1,7 @@
 package vip.mate.tool.builtin;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.workspace.core.service.MemberFileAccess;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.RequiredArgsConstructor;
@@ -52,10 +54,12 @@ public class AppendFileTool {
             }
 
             Path parent = path.getParent();
-            if (parent != null) Files.createDirectories(parent);
+            if (!MemberFileIsolation.isEnabled() && parent != null) Files.createDirectories(parent);
 
             boolean existed = Files.exists(path);
-            String current = existed ? Files.readString(path, StandardCharsets.UTF_8) : "";
+            String current = existed ? (MemberFileIsolation.isEnabled()
+                    ? new String(MemberFileAccess.read(MemberFileIsolation.root(ctx), path, 32 * 1024 * 1024), StandardCharsets.UTF_8)
+                    : Files.readString(path, StandardCharsets.UTF_8)) : "";
             if (current.endsWith(content)) {
                 JSONObject result = baseResult(filePath);
                 result.set("bytesWritten", 0);
@@ -70,7 +74,8 @@ public class AppendFileTool {
             }
 
             byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-            Files.write(path, bytes, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            if (MemberFileIsolation.isEnabled()) MemberFileAccess.write(MemberFileIsolation.root(ctx), path, bytes, true);
+            else Files.write(path, bytes, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
 
             JSONObject result = baseResult(filePath);
             result.set("bytesWritten", bytes.length);

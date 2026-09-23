@@ -1851,6 +1851,8 @@ public class ConversationService {
      * directory or the pre-migration default directory.
      */
     public void cleanAttachmentFiles(String conversationId) {
+        // Strict-mode retention is operator-managed until descriptor-relative deletion is available.
+        if (vip.mate.workspace.core.service.MemberFileIsolation.isEnabled()) return;
         if (conversationId == null || conversationId.isBlank()) {
             // A blank id would resolve to the upload root itself and wipe every
             // conversation's attachments — never walk/delete a bare root.

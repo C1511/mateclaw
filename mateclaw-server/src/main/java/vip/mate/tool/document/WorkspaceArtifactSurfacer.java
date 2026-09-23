@@ -1,5 +1,7 @@
 package vip.mate.tool.document;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.workspace.core.service.MemberFileAccess;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.lang.Nullable;
@@ -71,7 +73,8 @@ public final class WorkspaceArtifactSurfacer {
                     if (!attrs.isRegularFile() || size <= 0 || size > budget) {
                         continue;
                     }
-                    byte[] bytes = readArtifact(p, budget);
+                    byte[] bytes = MemberFileIsolation.isEnabled()
+                            ? MemberFileAccess.read(MemberFileIsolation.root(ctx), p, budget) : readArtifact(p, budget);
                     if (bytes.length == 0) {
                         continue;
                     }

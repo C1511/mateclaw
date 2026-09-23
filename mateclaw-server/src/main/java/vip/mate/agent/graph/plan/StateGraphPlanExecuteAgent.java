@@ -1,5 +1,6 @@
 package vip.mate.agent.graph.plan;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -317,6 +318,9 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
     }
 
     private Map<String, Object> buildInitialState(String userMessage, String conversationId) {
+        var incoming = vip.mate.agent.context.ChatOriginHolder.get().withConversationId(conversationId);
+        var memberOrigin = MemberFileIsolation.scope(incoming.withWorkspace(incoming.workspaceId(), this.workspaceBasePath));
+        String workspaceBasePath = memberOrigin.workspaceBasePath();
         // 加载会话历史（复用 BaseAgent.buildConversationHistory，与 ReAct 对齐）
         List<Message> historyMessages = buildConversationHistory(conversationId, userMessage);
 
@@ -386,6 +390,8 @@ public class StateGraphPlanExecuteAgent extends BaseAgent implements StructuredS
         }
         origin = origin.withConversationId(conversationId)
                 .withWorkspace(origin.workspaceId(), workspaceBasePath);
+        origin = MemberFileIsolation.scope(origin);
+        inputs.put(MateClawStateKeys.WORKSPACE_BASE_PATH, origin.workspaceBasePath() != null ? origin.workspaceBasePath() : "");
         inputs.put(MateClawStateKeys.CHAT_ORIGIN, origin);
 
         // RFC 48 — inject active goal snapshot for GoalEvaluationNode.

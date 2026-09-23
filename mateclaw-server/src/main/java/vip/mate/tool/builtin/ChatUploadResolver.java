@@ -1,5 +1,6 @@
 package vip.mate.tool.builtin;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import lombok.extern.slf4j.Slf4j;
 import vip.mate.workspace.core.service.ChatUploadLocationResolver;
 
@@ -83,7 +84,8 @@ public final class ChatUploadResolver {
         for (Path uploadDir : candidateUploadDirs(conversationId)) {
             Path matched = resolveIn(rawPath, uploadDir);
             if (matched != null) {
-                return matched;
+                return MemberFileIsolation.isEnabled()
+                        ? MemberFileIsolation.validate(MemberFileIsolation.root(null), matched.toString()) : matched;
             }
         }
         return null;
@@ -97,6 +99,11 @@ public final class ChatUploadResolver {
      */
     private static List<Path> candidateUploadDirs(String conversationId) {
         Set<Path> dirs = new LinkedHashSet<>();
+        if (MemberFileIsolation.isEnabled()) {
+            Path member = MemberFileIsolation.root(null);
+            Path conversation = member.resolve(UPLOAD_SUBDIR).resolve(ChatUploadLocationResolver.sanitizeSegment(conversationId));
+            return List.of(MemberFileIsolation.validate(member, conversation.toString()));
+        }
         String basePath = ToolExecutionContext.workspaceBasePath();
         if (basePath != null && !basePath.isBlank()) {
             Path scopedRoot = Paths.get(basePath).toAbsolutePath().normalize().resolve(UPLOAD_SUBDIR);

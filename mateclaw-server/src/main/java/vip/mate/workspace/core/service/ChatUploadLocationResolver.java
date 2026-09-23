@@ -202,7 +202,17 @@ public class ChatUploadLocationResolver {
      * (flat + date sub-directories). The single entry point for serving /
      * download paths; returns {@code null} when no candidate holds the file.
      */
+    public Path resolveExistingFile(vip.mate.agent.context.ChatOrigin origin, String storedName) {
+        if (!MemberFileIsolation.isEnabled()) return resolveExistingFile(origin.conversationId(), storedName);
+        Path root = resolveUploadRoot(origin).getParent();
+        Path dir = MemberFileIsolation.validate(root, root.resolve(UPLOAD_SUBDIR)
+                .resolve(sanitizeSegment(origin.conversationId())).toString());
+        Path found = findInConversationDir(dir, storedName);
+        return found == null ? null : MemberFileIsolation.validate(root, found.toString());
+    }
+
     public Path resolveExistingFile(String conversationId, String storedName) {
+        if (MemberFileIsolation.isEnabled()) throw new SecurityException("Authenticated member identity required for file lookup");
         for (Path conversationDir : resolveCandidateConversationDirs(conversationId)) {
             Path found = findInConversationDir(conversationDir, storedName);
             if (found != null) {
@@ -276,7 +286,24 @@ public class ChatUploadLocationResolver {
      * @param conversationId business conversation id
      * @return absolute, normalized upload root (never {@code null})
      */
+    public Path resolveUploadRoot(vip.mate.agent.context.ChatOrigin origin) {
+        if (!MemberFileIsolation.isEnabled()) return resolveUploadRoot(origin.conversationId());
+        return Path.of(MemberFileIsolation.scope(origin).workspaceBasePath()).resolve(UPLOAD_SUBDIR);
+    }
+
+    public Path resolveWriteDir(vip.mate.agent.context.ChatOrigin origin) {
+        if (!MemberFileIsolation.isEnabled()) return resolveWriteDir(origin.conversationId());
+        Path root = resolveUploadRoot(origin);
+        String segment = sanitizeSegment(origin.conversationId());
+        if (segment.isBlank() || segment.equals(".") || segment.equals("..")) throw new SecurityException("Invalid conversation id");
+        Path target = root.resolve(segment);
+        if (properties.isDateFolders()) target = target.resolve(LocalDate.now().toString());
+        return MemberFileIsolation.validate(root.getParent(), target.toString());
+    }
+
     public Path resolveUploadRoot(String conversationId) {
+        if (MemberFileIsolation.isEnabled()) return resolveUploadRoot(
+                vip.mate.agent.context.ChatOrigin.EMPTY.withConversationId(conversationId));
         ConversationEntity conv = lookupConversation(conversationId);
         Long workspaceId = conv != null ? conv.getWorkspaceId() : null;
         Long agentId = conv != null ? conv.getAgentId() : null;
@@ -289,6 +316,7 @@ public class ChatUploadLocationResolver {
      * picked agent), avoiding a DB lookup.
      */
     public Path resolveUploadRoot(Long workspaceId, Long agentId) {
+        if (MemberFileIsolation.isEnabled()) throw new SecurityException("Member identity required for upload storage");
         Path resolved = resolveWorkspaceScopedRoot(workspaceId, agentId);
         if (resolved != null) {
             return resolved;
@@ -307,6 +335,7 @@ public class ChatUploadLocationResolver {
      * @return de-duplicated, ordered list (at least the default root is present)
      */
     public List<Path> resolveCandidateUploadRoots(String conversationId) {
+        if (MemberFileIsolation.isEnabled()) return List.of(resolveUploadRoot(conversationId));
         ConversationEntity conv = lookupConversation(conversationId);
         Long workspaceId = conv != null ? conv.getWorkspaceId() : null;
         Long agentId = conv != null ? conv.getAgentId() : null;
@@ -318,6 +347,7 @@ public class ChatUploadLocationResolver {
      * already hold the workspace / agent ids.
      */
     public List<Path> resolveCandidateUploadRoots(Long workspaceId, Long agentId) {
+        if (MemberFileIsolation.isEnabled()) throw new SecurityException("Member identity required for upload storage");
         Set<Path> roots = new LinkedHashSet<>();
         Path scoped = resolveWorkspaceScopedRoot(workspaceId, agentId);
         if (scoped != null) {

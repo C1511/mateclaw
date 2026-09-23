@@ -1,5 +1,6 @@
 package vip.mate.tool.document;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -45,7 +46,9 @@ public class GeneratedFileController {
         if (user == null) {
             return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
         }
-        var access = cache.getAuthorized(id, owner -> canDownload(owner.workspaceId(), workspaceId, user));
+        var access = cache.getAuthorized(id, owner -> (!MemberFileIsolation.isEnabled()
+                || (owner.workspaceId() != null && owner.ownerUserId() != null && owner.ownerUserId().equals(user.getId())))
+                && canDownload(owner.workspaceId(), workspaceId, user));
         if (access.status() == GeneratedFileCache.AccessStatus.FORBIDDEN) {
             return ResponseEntity.status(403).body(Map.of("error", "Workspace permission denied"));
         }

@@ -1,5 +1,7 @@
 package vip.mate.tool.builtin;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
+import vip.mate.workspace.core.service.MemberFileAccess;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -84,7 +86,9 @@ public class EditFileTool {
             }
 
             // 读取文件内容
-            String content = Files.readString(path, StandardCharsets.UTF_8);
+            String content = MemberFileIsolation.isEnabled()
+                    ? new String(MemberFileAccess.read(MemberFileIsolation.root(ctx), path, 32 * 1024 * 1024), StandardCharsets.UTF_8)
+                    : Files.readString(path, StandardCharsets.UTF_8);
 
             // 检查 oldText 是否存在
             if (!content.contains(oldText)) {
@@ -108,7 +112,8 @@ public class EditFileTool {
             }
 
             // 写回文件
-            Files.writeString(path, newContent, StandardCharsets.UTF_8);
+            if (MemberFileIsolation.isEnabled()) MemberFileAccess.write(MemberFileIsolation.root(ctx), path, newContent.getBytes(StandardCharsets.UTF_8), false);
+            else Files.writeString(path, newContent, StandardCharsets.UTF_8);
 
             result.set("replacements", replacements);
             result.set("replaceAll", doReplaceAll);

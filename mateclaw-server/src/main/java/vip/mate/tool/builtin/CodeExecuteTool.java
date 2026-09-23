@@ -64,6 +64,9 @@ public class CodeExecuteTool {
     private final ObjectMapper objectMapper;
     private final GeneratedFileCache generatedFileCache;
 
+    @Autowired
+    private vip.mate.tool.sandbox.MemberSandboxExecutor memberSandboxExecutor;
+
     @Lazy
     @Autowired
     private AgentBindingResolver agentBindingResolver;
@@ -117,6 +120,9 @@ public class CodeExecuteTool {
         log.info("[CodeExecute] language={}, skill={}, codeChars={}",
                 language, skillName, code == null ? 0 : code.length());
 
+        if (vip.mate.workspace.core.service.MemberFileIsolation.isEnabled()) {
+            return executeIsolated(language, code, skillName, args, timeoutSeconds, ctx);
+        }
         Path workingDir;
         Map<String, String> envVars = Collections.emptyMap();
 
@@ -178,6 +184,28 @@ public class CodeExecuteTool {
      * argument per element, anything else is forwarded verbatim as a single
      * argument (so a bare date / version string is never mangled by JSON parsing).
      */
+    private String executeIsolated(String language, String code, String skillName, String args,
+                                   Integer timeoutSeconds, ToolContext ctx) {
+        if (skillName != null && !skillName.isBlank()) return formatError("Shared skill execution is unavailable in member isolation mode");
+        try {
+            var scoped = vip.mate.workspace.core.service.MemberFileIsolation.scope(ChatOrigin.from(ctx));
+            Path root = Path.of(scoped.workspaceBasePath());
+            long since = System.currentTimeMillis();
+            var output = memberSandboxExecutor.executeCode(language, code, root, normalizeArgs(args), Map.of(),
+                    timeoutSeconds == null || timeoutSeconds <= 0 ? 30 : timeoutSeconds);
+            var json = objectMapper.readTree(formatResult(new SkillScriptExecutionService.ScriptResult(
+                    output.exitCode(), output.stdout(), output.stderr()),
+                    WorkspaceArtifactSurfacer.collect(generatedFileCache, root, since, scoped.toToolContext())));
+            ((com.fasterxml.jackson.databind.node.ObjectNode) json).put("timedOut", output.timedOut());
+            return objectMapper.writeValueAsString(json);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return formatError("Isolated execution cancelled");
+        } catch (Exception e) {
+            return formatError("Isolated execution failed: " + e.getMessage());
+        }
+    }
+
     List<String> normalizeArgs(String args) {
         if (args == null) {
             return null;

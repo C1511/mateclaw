@@ -1,5 +1,6 @@
 package vip.mate.skill.runtime;
 
+import vip.mate.workspace.core.service.MemberFileIsolation;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -110,6 +111,7 @@ public class SkillScriptExecutionService {
      */
     public ScriptResult executeCode(String language, String code, Path workingDir,
                                     List<String> args, Map<String, String> envVars, Long timeoutSeconds) {
+        if (MemberFileIsolation.isEnabled()) return ScriptResult.error(-1, "Use the isolated code executor in member isolation mode");
         if (code == null || code.isBlank()) {
             return ScriptResult.error(-1, "No code supplied");
         }
@@ -162,6 +164,7 @@ public class SkillScriptExecutionService {
 
     private ScriptResult executeResolved(Path scriptPath, List<String> args, Map<String, String> envVars,
                                          long timeoutSeconds, boolean scrubSensitiveEnv) {
+        if (MemberFileIsolation.isEnabled()) return ScriptResult.error(-1, "Skill script execution is unavailable in member isolation mode");
         if (!Files.exists(scriptPath) || !Files.isRegularFile(scriptPath)) {
             return ScriptResult.error(-1, "Script not found: " + scriptPath);
         }

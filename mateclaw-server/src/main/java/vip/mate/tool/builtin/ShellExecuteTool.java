@@ -47,6 +47,9 @@ public class ShellExecuteTool {
     private final vip.mate.i18n.I18nService i18n;
     private final GeneratedFileCache generatedFileCache;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private vip.mate.tool.sandbox.MemberSandboxExecutor memberSandboxExecutor;
+
     private static final int DEFAULT_TIMEOUT_SECONDS = 60;
     private static final int MAX_OUTPUT_BYTES = 10_000;
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "")
@@ -64,6 +67,9 @@ public class ShellExecuteTool {
             // ChatOrigin so the workspace boundary check honors per-agent basePath.
             @Nullable ToolContext ctx) {
 
+        if (vip.mate.workspace.core.service.MemberFileIsolation.isEnabled()) {
+            return executeIsolated(command, timeoutSeconds, ctx);
+        }
         ExecutionObservationSink evidence = ExecutionObservationSink.from(ctx);
         int timeout = (timeoutSeconds != null && timeoutSeconds > 0) ? timeoutSeconds : DEFAULT_TIMEOUT_SECONDS;
         // 硬上限：不允许超过 300 秒
@@ -195,6 +201,35 @@ public class ShellExecuteTool {
      *   from the calling environment still apply; falls back to /bin/sh
      *   when $SHELL is unset or points at a non-executable path.
      */
+    private String executeIsolated(String command, Integer timeoutSeconds, ToolContext ctx) {
+        JSONObject result = new JSONObject();
+        result.set("command", command);
+        ExecutionObservationSink evidence = ExecutionObservationSink.from(ctx);
+        try {
+            var scoped = vip.mate.workspace.core.service.MemberFileIsolation.scope(vip.mate.agent.context.ChatOrigin.from(ctx));
+            Path root = Path.of(scoped.workspaceBasePath());
+            long since = System.currentTimeMillis();
+            var output = memberSandboxExecutor.execute(List.of("/bin/sh", "-c", command), root, java.util.Map.of(),
+                    timeoutSeconds == null || timeoutSeconds <= 0 ? DEFAULT_TIMEOUT_SECONDS : timeoutSeconds);
+            result.set("exitCode", output.exitCode());
+            result.set("stdout", output.stdout());
+            result.set("stderr", output.stderr());
+            result.set("timedOut", output.timedOut());
+            if (evidence != null) evidence.command(output.exitCode(), output.timedOut(), false, false, root.toString());
+            List<String> files = WorkspaceArtifactSurfacer.collect(generatedFileCache, root, since, scoped.toToolContext());
+            if (!files.isEmpty()) result.set("generatedFiles", String.join("\n", files));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            result.set("exitCode", -1); result.set("cancelled", true); result.set("stderr", "Command cancelled");
+            if (evidence != null) evidence.command(null, false, true, false);
+        } catch (Exception e) {
+            result.set("exitCode", -1); result.set("stdout", ""); result.set("timedOut", false);
+            result.set("stderr", "Isolated execution failed: " + e.getMessage());
+            if (evidence != null) evidence.command(null, false, false, true);
+        }
+        return JSONUtil.toJsonPrettyStr(result);
+    }
+
     private static ProcessBuilder buildShellProcess(String command, @Nullable ToolContext ctx) {
         ProcessBuilder pb;
         if (IS_WINDOWS) {

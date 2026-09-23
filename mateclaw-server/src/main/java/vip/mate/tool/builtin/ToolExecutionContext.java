@@ -20,6 +20,8 @@ import vip.mate.agent.context.ChatOrigin;
  */
 public final class ToolExecutionContext {
 
+    private static final ThreadLocal<ChatOrigin> ORIGIN = new ThreadLocal<>();
+
     private static final ThreadLocal<String> CONVERSATION_ID = new ThreadLocal<>();
     private static final ThreadLocal<String> USERNAME = new ThreadLocal<>();
     /** 工作区活动目录（为空不限制） */
@@ -28,12 +30,14 @@ public final class ToolExecutionContext {
     private ToolExecutionContext() {}
 
     public static void set(String conversationId, String username) {
+        ORIGIN.remove();
         CONVERSATION_ID.set(conversationId);
         USERNAME.set(username);
         WORKSPACE_BASE_PATH.remove();
     }
 
     public static void set(String conversationId, String username, String workspaceBasePath) {
+        ORIGIN.remove();
         CONVERSATION_ID.set(conversationId);
         USERNAME.set(username);
         WORKSPACE_BASE_PATH.set(workspaceBasePath);
@@ -52,7 +56,11 @@ public final class ToolExecutionContext {
         return WORKSPACE_BASE_PATH.get();
     }
 
+    public static void setOrigin(ChatOrigin origin) { ORIGIN.set(origin); }
+    public static ChatOrigin origin() { return ORIGIN.get(); }
+
     public static void clear() {
+        ORIGIN.remove();
         CONVERSATION_ID.remove();
         USERNAME.remove();
         WORKSPACE_BASE_PATH.remove();
