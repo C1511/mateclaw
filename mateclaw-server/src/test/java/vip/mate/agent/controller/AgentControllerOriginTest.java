@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import reactor.core.publisher.Flux;
 import vip.mate.agent.AgentService;
 import vip.mate.agent.context.ChatOrigin;
 import vip.mate.agent.model.AgentEntity;
 import vip.mate.agent.service.AgentGenerationService;
 import vip.mate.audit.service.AuditEventService;
+import vip.mate.auth.model.UserEntity;
 import vip.mate.auth.service.AuthService;
+import vip.mate.exception.MateClawException;
 import vip.mate.llm.service.ModelCapabilityService;
 import vip.mate.llm.service.ModelConfigService;
 import vip.mate.system.service.SystemSettingService;
@@ -19,6 +23,7 @@ import vip.mate.workspace.conversation.model.MessageEntity;
 import vip.mate.workspace.core.service.WorkspaceService;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -38,13 +43,21 @@ class AgentControllerOriginTest {
     private AgentService agentService;
     private ConversationService conversations;
     private AgentController controller;
+    // 【安全加固】chatStream 现要求登录，测试需提供已认证用户
+    private Authentication auth;
 
     @BeforeEach
     void setUp() {
         agentService = mock(AgentService.class);
         conversations = mock(ConversationService.class);
+        AuthService authService = mock(AuthService.class);
+        UserEntity user = new UserEntity();
+        user.setId(1L);
+        user.setUsername("alice");
+        when(authService.findByUsername("alice")).thenReturn(user);
+        auth = new UsernamePasswordAuthenticationToken("alice", null, java.util.List.of());
         controller = new AgentController(agentService, conversations,
-                mock(AuditEventService.class), mock(AuthService.class), mock(WorkspaceService.class),
+                mock(AuditEventService.class), authService, mock(WorkspaceService.class),
                 mock(ModelConfigService.class), mock(ModelCapabilityService.class),
                 mock(SystemSettingService.class), mock(AgentGenerationService.class),
                 new ObjectMapper());
@@ -63,7 +76,7 @@ class AgentControllerOriginTest {
         when(agentService.chatStream(eq(AGENT_ID), eq(MESSAGE), eq(CONVERSATION_ID), any()))
                 .thenReturn(Flux.empty());
 
-        controller.chatStream(AGENT_ID, MESSAGE, CONVERSATION_ID, WORKSPACE_ID);
+        controller.chatStream(AGENT_ID, MESSAGE, CONVERSATION_ID, WORKSPACE_ID, auth);
 
         ArgumentCaptor<ChatOrigin> origin = ArgumentCaptor.forClass(ChatOrigin.class);
         verify(agentService, org.mockito.Mockito.timeout(1000))
@@ -71,6 +84,16 @@ class AgentControllerOriginTest {
         assertEquals(MESSAGE_ID, origin.getValue().originMessageId());
         verifySingleUserSave();
         verify(agentService, never()).chatStream(AGENT_ID, MESSAGE, CONVERSATION_ID);
+    }
+
+    // 【安全加固】匿名调用 SSE 对话入口必须被拒绝，且不得落库或驱动员工
+    @Test
+    void sseEntryRejectsAnonymous() {
+        MateClawException ex = assertThrows(MateClawException.class,
+                () -> controller.chatStream(AGENT_ID, MESSAGE, CONVERSATION_ID, WORKSPACE_ID, null));
+        assertEquals(401, ex.getCode());
+        verify(conversations, never()).saveMessage(any(), any(), any());
+        verify(agentService, never()).chatStream(any(), any(), any(), any());
     }
 
     @Test
