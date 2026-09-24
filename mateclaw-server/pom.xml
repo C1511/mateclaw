@@ -53,6 +53,20 @@
             </exclusions>
         </dependency>
 
+        <!-- CosyVoice uses the native WebSocket API, not OpenAI audio/speech. -->
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>dashscope-sdk-java</artifactId>
+            <version>2.22.2</version>
+            <exclusions>
+                <!-- Spring Boot already provides Logback. -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- ===== Spring AI Alibaba Graph Core (StateGraph workflow engine) ===== -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>

@@ -497,6 +497,7 @@ export default {
         },
       },
     },
+    ttsFailed: '语音合成或播放失败',
     ttsPlay: '朗读',
     ttsStop: '停止朗读',
     conversations: '会话列表',

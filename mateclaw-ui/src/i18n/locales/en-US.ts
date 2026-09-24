@@ -497,6 +497,7 @@ export default {
         },
       },
     },
+    ttsFailed: 'Speech synthesis or playback failed',
     ttsPlay: 'Read Aloud',
     ttsStop: 'Stop Reading',
     conversations: 'Conversations',

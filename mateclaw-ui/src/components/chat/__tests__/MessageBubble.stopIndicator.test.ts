@@ -29,7 +29,7 @@ vi.mock('@/composables/useMcToast', () => ({
 vi.mock('@/composables/useToolLabel', () => ({
   useToolLabel: () => ({ getToolLabel: (name: string) => name }),
 }))
-vi.mock('@/api', () => ({ http: { get: vi.fn(), post: vi.fn() } }))
+vi.mock('@/api', () => ({ http: { get: vi.fn(), post: vi.fn() }, fetchAuthenticatedBlob: vi.fn() }))
 vi.mock('@/utils/clipboard', () => ({ copyToClipboard: vi.fn() }))
 vi.mock('@/utils/generatedFileLinks', () => ({
   buildGeneratedFileNameMap: vi.fn(() => new Map()),
@@ -58,6 +58,8 @@ vi.mock('../UserMessageContent.vue', () => ({
 }))
 
 import MessageBubble from '../MessageBubble.vue'
+import { http, fetchAuthenticatedBlob } from '@/api'
+import { mcToast } from '@/composables/useMcToast'
 
 const apps: Array<ReturnType<typeof createApp>> = []
 
@@ -92,6 +94,9 @@ function mountMessage(message: Message, locale = 'zh-CN') {
 afterEach(() => {
   apps.splice(0).forEach(app => app.unmount())
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.clearAllMocks()
 })
 
 describe('MessageBubble stop indicator', () => {
@@ -129,4 +134,70 @@ describe('MessageBubble stop indicator', () => {
     expect(host.textContent).toContain('已中断并继续处理下一条消息')
     expect(host.querySelector('.stopped-indicator--interrupted')).not.toBeNull()
   })
+})
+
+
+describe('MessageBubble TTS (#646)', () => {
+  function clickReadAloud() {
+    const host = mountMessage({ id: 'tts', conversationId: 'conv', role: 'assistant',
+      content: 'Hello', contentParts: [], status: 'completed' } as Message)
+    const button = host.querySelector<HTMLButtonElement>('[title="chat.ttsPlay"]')!
+    expect(button).not.toBeNull()
+    button.click()
+    return button
+  }
+
+  it('plays the unwrapped synthesis response and releases audio on stop', async () => {
+    vi.mocked(http.post).mockResolvedValue({ success: true, audioUrl: '/api/v1/chat/files/conv/tts.mp3' } as never)
+    vi.mocked(fetchAuthenticatedBlob).mockResolvedValue(new Blob(['audio']))
+    const play = vi.fn().mockResolvedValue(undefined)
+    const pause = vi.fn()
+    vi.stubGlobal('Audio', class { play = play; pause = pause })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:tts')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const button = clickReadAloud()
+    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce())
+    expect(fetchAuthenticatedBlob).toHaveBeenCalledWith('/api/v1/chat/files/conv/tts.mp3')
+    button.click()
+    expect(pause).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledWith('blob:tts')
+  })
+
+  it('shows backend synthesis errors instead of silently doing nothing', async () => {
+    vi.mocked(http.post).mockResolvedValue({ success: false, error: 'DashScope: invalid voice' } as never)
+    clickReadAloud()
+    await vi.waitFor(() => expect(mcToast.error).toHaveBeenCalledWith('DashScope: invalid voice'))
+  })
+
+  it('shows audio download failures and resets the loading state', async () => {
+    vi.mocked(http.post).mockResolvedValue({ success: true, audioUrl: '/audio' } as never)
+    vi.mocked(fetchAuthenticatedBlob).mockRejectedValue(new Error('Fetch failed: 403'))
+    const button = clickReadAloud()
+    await vi.waitFor(() => expect(mcToast.error).toHaveBeenCalledWith('Fetch failed: 403'))
+    expect(button.disabled).toBe(false)
+  })
+  it('releases the audio URL when playback is rejected', async () => {
+    vi.mocked(http.post).mockResolvedValue({ success: true, audioUrl: '/audio' } as never)
+    vi.mocked(fetchAuthenticatedBlob).mockResolvedValue(new Blob(['audio']))
+    const pause = vi.fn()
+    vi.stubGlobal('Audio', class { pause = pause; play = vi.fn().mockRejectedValue(new Error('Playback blocked')) })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:rejected')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    clickReadAloud()
+    await vi.waitFor(() => expect(mcToast.error).toHaveBeenCalledWith('Playback blocked'))
+    expect(pause).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledWith('blob:rejected')
+  })
+
+  it('does not start playback when the component unmounts during synthesis', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(http.post).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    clickReadAloud()
+    apps.pop()!.unmount()
+    finish({ success: true, audioUrl: '/audio' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fetchAuthenticatedBlob).not.toHaveBeenCalled()
+  })
+
 })

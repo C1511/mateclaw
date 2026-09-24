@@ -587,7 +587,7 @@ import { buildGeneratedFileNameMap, linkifyGeneratedFileUrls } from '@/utils/gen
 import { ensureModelViewer } from '@/utils/lazyModelViewer'
 import { useAuthenticatedAttachment } from '@/composables/useAuthenticatedAttachment'
 import { useToolLabel } from '@/composables/useToolLabel'
-import { http } from '@/api'
+import { http, fetchAuthenticatedBlob } from '@/api'
 import { copyToClipboard } from '@/utils/clipboard'
 import TypingCursor from './TypingCursor.vue'
 import { previewKindOf } from './preview/previewKind'
@@ -853,59 +853,59 @@ function copyMessage() {
 // --- TTS 朗读 ---
 const ttsState = ref<'idle' | 'loading' | 'playing'>('idle')
 let ttsAudio: HTMLAudioElement | null = null
+let ttsBlobUrl: string | null = null
+let ttsRequestVersion = 0
+
+function stopTts() {
+  ttsAudio?.pause()
+  if (ttsAudio) { ttsAudio.onended = null; ttsAudio.onerror = null }
+  ttsAudio = null
+  if (ttsBlobUrl) URL.revokeObjectURL(ttsBlobUrl)
+  ttsBlobUrl = null
+  ttsState.value = 'idle'
+}
 
 async function handleTts() {
   if (ttsState.value === 'playing') {
-    // 停止播放
-    ttsAudio?.pause()
-    ttsAudio = null
-    ttsState.value = 'idle'
+    stopTts()
     return
   }
-
+  if (ttsState.value === 'loading') return
   const text = displayContent.value || props.message.content || ''
-  if (!text) return
-
   const conversationId = props.message.conversationId
-  if (!conversationId) return
+  if (!text || !conversationId) return
 
+  const version = ++ttsRequestVersion
   ttsState.value = 'loading'
   try {
-    const res: any = await http.post('/tts/synthesize', {
-      conversationId,
-      text,
-    })
-    if (res.data?.success && res.data?.audioUrl) {
-      // 通过认证 fetch 获取音频 blob
-      const audioRes = await fetch(res.data.audioUrl, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-      })
-      const blob = await audioRes.blob()
-      const blobUrl = URL.createObjectURL(blob)
-      ttsAudio = new Audio(blobUrl)
-      ttsAudio.onended = () => {
-        ttsState.value = 'idle'
-        URL.revokeObjectURL(blobUrl)
-        ttsAudio = null
-      }
-      ttsAudio.onerror = () => {
-        ttsState.value = 'idle'
-        URL.revokeObjectURL(blobUrl)
-        ttsAudio = null
-      }
-      ttsState.value = 'playing'
-      await ttsAudio.play()
-    } else {
-      ttsState.value = 'idle'
+    // The shared interceptor already unwraps the raw TTS response body.
+    const result: any = await http.post('/tts/synthesize', { conversationId, text }, { timeout: 240_000 })
+    if (version !== ttsRequestVersion) return
+    if (!result?.success || !result.audioUrl) {
+      throw new Error(result?.error || t('chat.ttsFailed'))
     }
-  } catch {
-    ttsState.value = 'idle'
+    const blob = await fetchAuthenticatedBlob(result.audioUrl)
+    if (version !== ttsRequestVersion) return
+    ttsBlobUrl = URL.createObjectURL(blob)
+    ttsAudio = new Audio(ttsBlobUrl)
+    ttsAudio.onended = stopTts
+    ttsAudio.onerror = () => {
+      stopTts()
+      mcToast.error(t('chat.ttsFailed'))
+    }
+    await ttsAudio.play()
+    if (version === ttsRequestVersion && ttsAudio) ttsState.value = 'playing'
+  } catch (error) {
+    if (version !== ttsRequestVersion) return
+    stopTts()
+    mcToast.error(error instanceof Error ? error.message : t('chat.ttsFailed'))
   }
 }
 
 onBeforeUnmount(() => {
   if (copyTimer) clearTimeout(copyTimer)
-  if (ttsAudio) { ttsAudio.pause(); ttsAudio = null }
+  ++ttsRequestVersion
+  stopTts()
   revokeAll()
 })
 

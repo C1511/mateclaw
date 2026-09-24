@@ -1,9 +1,9 @@
 package vip.mate.tts.provider;
 
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.alibaba.dashscope.audio.ttsv2.SpeechSynthesisParam;
+import com.alibaba.dashscope.audio.ttsv2.SpeechSynthesisAudioFormat;
+import com.alibaba.dashscope.audio.ttsv2.SpeechSynthesizer;
+import java.nio.ByteBuffer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -17,11 +17,11 @@ import vip.mate.tts.TtsResult;
 import java.util.List;
 
 /**
- * DashScope TTS Provider — 使用 CosyVoice（OpenAI 兼容接口）
+ * DashScope TTS Provider — 使用 CosyVoice 原生 WebSocket SDK
  * <p>
  * 同步模式，直接返回音频流。
  * 复用已有的 DashScope LLM provider 的 API Key。
- * API 文档: https://help.aliyun.com/zh/model-studio/developer-reference/cosyvoice-openai-compatible
+ * API 文档: https://help.aliyun.com/zh/model-studio/developer-reference/cosyvoice-java-sdk
  *
  * @author MateClaw Team
  */
@@ -31,11 +31,9 @@ import java.util.List;
 public class DashScopeTtsProvider implements TtsProvider {
 
     private final ModelProviderService modelProviderService;
-    private final ObjectMapper objectMapper;
 
-    private static final String BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
     private static final String DEFAULT_MODEL = "cosyvoice-v2";
-    private static final String DEFAULT_VOICE = "longxiaochun";
+    private static final String DEFAULT_VOICE = "longxiaochun_v2";
 
     @Override
     public String id() {
@@ -69,9 +67,8 @@ public class DashScopeTtsProvider implements TtsProvider {
     @Override
     public List<String> availableVoices() {
         return List.of(
-                "longxiaochun", "longxiaoxia", "longlaotie", "longshu",
-                "longhua", "longshuo", "longjielidou", "longmiao",
-                "longyue", "longfei", "longtong", "longxiang"
+                "longxiaochun_v2", "longxiaoxia_v2", "longshu_v2",
+                "longhua_v2", "longwan_v2", "longcheng_v2"
         );
     }
 
@@ -83,7 +80,7 @@ public class DashScopeTtsProvider implements TtsProvider {
     @Override
     public TtsResult synthesize(TtsRequest request, SystemSettingsDTO config) {
         String apiKey = getDashScopeApiKey();
-        if (apiKey == null) {
+        if (apiKey == null || apiKey.isBlank()) {
             return TtsResult.failure("DashScope API Key 未配置");
         }
 
@@ -93,36 +90,33 @@ public class DashScopeTtsProvider implements TtsProvider {
             String voice = request.getVoice() != null && !request.getVoice().isBlank()
                     ? request.getVoice() : DEFAULT_VOICE;
 
-            ObjectNode body = objectMapper.createObjectNode();
-            body.put("model", model);
-            body.put("input", request.getText());
-            body.put("voice", voice);
-            body.put("response_format", "mp3");
-            if (request.getSpeed() != null && request.getSpeed() != 1.0) {
-                body.put("speed", request.getSpeed());
+            if ((request.getVoice() == null || request.getVoice().isBlank())
+                    && availableVoices().contains(config.getTtsDefaultVoice() == null ? "" : config.getTtsDefaultVoice())) {
+                voice = config.getTtsDefaultVoice();
             }
-
-            String endpoint = BASE_URL + "/audio/speech";
-            HttpResponse response = HttpRequest.post(endpoint)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Content-Type", "application/json")
-                    .body(body.toString())
-                    .timeout(60_000)
-                    .execute();
-
-            if (response.getStatus() == 200) {
-                byte[] audioData = response.bodyBytes();
+            SpeechSynthesisParam param = SpeechSynthesisParam.builder()
+                    .apiKey(apiKey)
+                    .model(model)
+                    .voice(voice)
+                    .format(SpeechSynthesisAudioFormat.MP3_24000HZ_MONO_256KBPS)
+                    .speechRate(request.getSpeed() == null ? 1.0f : request.getSpeed().floatValue())
+                    .build();
+            SpeechSynthesizer synthesizer = new SpeechSynthesizer(param, null);
+            try {
+                ByteBuffer audio = synthesizer.call(request.getText(), 60_000);
+                if (audio == null || !audio.hasRemaining()) {
+                    return TtsResult.failure("DashScope TTS 未返回音频数据");
+                }
+                byte[] audioData = new byte[audio.remaining()];
+                audio.get(audioData);
                 log.info("[DashScope TTS] Synthesized {} bytes (model={}, voice={})", audioData.length, model, voice);
                 return TtsResult.success(audioData, "audio/mpeg", "mp3");
-            } else {
-                String errBody = response.body();
-                log.warn("[DashScope TTS] Failed: HTTP {} - {}", response.getStatus(), errBody);
-                return TtsResult.failure(TtsResponseDiagnostics.failureMessage(
-                        "DashScope TTS", endpoint, response.getStatus(), errBody));
+            } finally {
+                synthesizer.getDuplexApi().close(1000, "bye");
             }
         } catch (Exception e) {
             log.error("[DashScope TTS] Error: {}", e.getMessage(), e);
-            return TtsResult.failure("DashScope TTS 异常: " + e.getMessage());
+            return TtsResult.failure("DashScope TTS 异常: " + TtsResponseDiagnostics.snippet(e.getMessage()));
         }
     }
 
