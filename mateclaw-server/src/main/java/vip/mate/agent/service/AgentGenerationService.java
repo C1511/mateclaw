@@ -295,6 +295,14 @@ public class AgentGenerationService {
     private JsonNode parseJson(String response) {
         if (response == null || response.isBlank()) return null;
         String cleaned = response.trim();
+        // Some reasoning models prepend thinking to content on non-streaming
+        // calls. Strip only leading blocks: tags inside JSON string values are
+        // legitimate persona text, and JSON examples in thinking are not drafts.
+        while (cleaned.startsWith("<think>")) {
+            int end = cleaned.indexOf("</think>", "<think>".length());
+            if (end < 0) return null; // Incomplete reasoning is not a final answer.
+            cleaned = cleaned.substring(end + "</think>".length()).trim();
+        }
         if (cleaned.startsWith("```json")) cleaned = cleaned.substring(7);
         else if (cleaned.startsWith("```")) cleaned = cleaned.substring(3);
         if (cleaned.endsWith("```")) cleaned = cleaned.substring(0, cleaned.length() - 3);
