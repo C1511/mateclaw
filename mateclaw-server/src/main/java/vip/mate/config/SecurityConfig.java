@@ -91,7 +91,11 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/v1/auth/login",
                     "/api/v1/auth/sso/**",
-                    "/api/v1/agents/*/chat/stream",
+                    // 【安全加固】已移除 "/api/v1/agents/*/chat/stream"：
+                    // 该接口（AgentController#chatStream）内部不校验登录，放行后任何人都能
+                    // 凭固定的内置员工 ID（如 1000000001）匿名驱动员工、消耗模型额度、调用工具。
+                    // 前端不使用该接口；需要 SSE 的调用方可用 ?token=<JWT> 或 PAT 认证。
+                    // 合并上游时若此处冲突，请保持该路径不在 permitAll 列表中。
                     "/api/v1/chat/stream",
                     "/api/v1/chat/*/stop",
                     "/api/v1/setup/**",

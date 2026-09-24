@@ -54,7 +54,9 @@ async function readRendererToken(): Promise<string | null> {
   }
 }
 
-const localBridge = new LocalBridge(() => BACKEND_URL, readRendererToken)
+// 【安全加固】第三个参数：本地工具通道仅对用户已明确信任证书的 host 跳过 TLS 校验。
+const localBridge = new LocalBridge(() => BACKEND_URL, readRendererToken,
+  (host) => trustedCertHosts.has(host))
 
 // Connection state: which backend the shell is talking to.
 let connectionMode: ConnectionMode | null = null

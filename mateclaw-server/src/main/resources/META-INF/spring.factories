@@ -1,0 +1,3 @@
+# 【安全加固】注册 JWT 密钥兜底处理器：空密钥或公开默认密钥时自动生成并持久化随机密钥。
+org.springframework.boot.env.EnvironmentPostProcessor=\
+vip.mate.config.JwtSecretEnvironmentPostProcessor

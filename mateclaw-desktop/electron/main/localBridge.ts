@@ -24,6 +24,8 @@ const RECONNECT_MAX_MS = 30_000
 
 type TokenProvider = () => Promise<string | null>
 type UrlProvider = () => string
+// 【安全加固】判断某个 host（含端口）是否已被用户在证书警告弹窗中明确信任。
+type TrustedHostChecker = (host: string) => boolean
 
 export class LocalBridge {
   private ws: WebSocket | null = null
@@ -33,7 +35,9 @@ export class LocalBridge {
 
   constructor(
     private readonly getBackendUrl: UrlProvider,
-    private readonly getToken: TokenProvider
+    private readonly getToken: TokenProvider,
+    // 【安全加固】默认不信任任何证书异常；由 index.ts 传入用户已确认信任的 host 集合。
+    private readonly isTrustedCertHost: TrustedHostChecker = () => false
   ) {}
 
   // Begin maintaining a connection. Safe to call repeatedly.
@@ -88,9 +92,18 @@ export class LocalBridge {
     }
 
     console.log('[LocalBridge] Connecting tunnel…')
-    // rejectUnauthorized:false mirrors the app's handling of enterprise
-    // self-signed certificates for remote servers the user chose to trust.
-    const ws = new WebSocket(url, { rejectUnauthorized: false })
+    // 【安全加固】原实现对所有服务器都 rejectUnauthorized:false（完全不校验证书），
+    // 而该通道既在 URL 中携带登录 JWT，又能让服务器读写本机白名单目录、发起本机命令。
+    // 在不可信网络下，中间人可借此窃取令牌并冒充服务器。现改为默认校验证书，
+    // 仅当用户已在窗口的证书警告弹窗中对该 host 选择"信任并继续"时才跳过校验，
+    // 与主窗口的信任决策保持一致。
+    let host = ''
+    try {
+      host = new URL(url).host
+    } catch {
+      /* buildWsUrl 已保证格式，解析失败时按不信任处理 */
+    }
+    const ws = new WebSocket(url, { rejectUnauthorized: !this.isTrustedCertHost(host) })
     this.ws = ws
 
     ws.on('open', () => {

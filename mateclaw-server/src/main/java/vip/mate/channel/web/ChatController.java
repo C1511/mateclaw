@@ -1076,9 +1076,14 @@ public class ChatController {
     @Operation(summary = "停止流式生成")
     @PostMapping("/{conversationId}/stop")
     public R<Map<String, Object>> stopStream(@PathVariable String conversationId, Authentication auth) {
-        String username = auth != null ? auth.getName() : "anonymous";
-        // 权限校验：已认证用户需验证会话归属，匿名用户（permitAll）直接放行
-        if (auth != null && !conversationService.isConversationOwner(conversationId, username)) {
+        // 【安全加固】原逻辑对匿名用户跳过归属校验，任何人都能停止他人正在生成的对话、
+        // 并以 "anonymous" 身份拒绝其全部待审批工具调用。现改为：未登录一律 401，
+        // 已登录必须是会话所有者。前端（api/index.ts、useChat.ts）调用时均携带 Token，不受影响。
+        if (auth == null) {
+            return R.fail(401, "未登录");
+        }
+        String username = auth.getName();
+        if (!conversationService.isConversationOwner(conversationId, username)) {
             return R.fail(403, "无权操作该会话");
         }
         boolean stopped = streamTracker.requestStop(conversationId);

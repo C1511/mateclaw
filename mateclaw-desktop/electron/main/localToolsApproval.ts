@@ -12,13 +12,14 @@ const sessionAllow = new Set<string>()
 
 export type ApprovalKind = 'write_file' | 'edit_file' | 'execute_shell'
 
-// The cache key scopes "remember": file ops by exact path, shell by command
-// prefix (first word + first 40 chars) so re-running the same kind of command
-// doesn't re-prompt, but a different command still does.
+// The cache key scopes "remember": file ops by exact path, shell by the exact
+// full command.
+// 【安全加固】原实现按"首个单词 + 前 40 个字符"匹配 shell 命令：用户对一条 ≥40 字符的命令
+// 勾选"不再询问"后，远程 Agent 只要保持前 40 个字符不变、在后面追加 `; curl ... | sh`
+// 之类的内容，就会被自动放行、不再弹窗。现改为整条命令（去除首尾空白后）完全一致才免询问。
 function cacheKey(kind: ApprovalKind, subject: string): string {
   if (kind === 'execute_shell') {
-    const head = subject.trim().split(/\s+/)[0] || ''
-    return `shell:${head}:${subject.trim().slice(0, 40)}`
+    return `shell:${subject.trim()}`
   }
   return `${kind}:${subject}`
 }

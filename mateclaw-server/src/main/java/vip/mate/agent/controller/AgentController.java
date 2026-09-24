@@ -211,7 +211,12 @@ public class AgentController {
             @PathVariable Long id,
             @RequestParam String message,
             @RequestParam(defaultValue = "default") String conversationId,
-            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId) {
+            @RequestHeader(value = "X-Workspace-Id", required = false) Long workspaceId,
+            Authentication auth) {
+        // 【安全加固】纵深防御：即使 SecurityConfig 被改回 permitAll，也拒绝匿名调用。
+        // WorkspaceAccessInterceptor 对未登录请求直接放行（假定由 Spring Security 拦截），
+        // 因此必须在这里显式校验，否则匿名用户可直接驱动员工。
+        resolveUserId(auth);
         AgentEntity agent = agentService.getAgent(id);
         verifyResourceWorkspace(agent != null ? agent.getWorkspaceId() : null, workspaceId);
         verifyAgentEnabled(agent);
