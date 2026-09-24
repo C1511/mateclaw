@@ -69,6 +69,8 @@
         <jgrapht.version>1.5.3</jgrapht.version>
         <pdfbox.version>3.0.7</pdfbox.version>
         <pebble.version>4.1.1</pebble.version>
+        <!-- 【本地修复】victools JSON Schema 版本，须与 spring-ai.version 所需版本一致（见 dependencyManagement 末尾说明） -->
+        <victools-jsonschema.version>4.38.0</victools-jsonschema.version>
 
         <!-- Build plugin versions -->
         <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
@@ -323,6 +325,31 @@
                 <groupId>io.pebbletemplates</groupId>
                 <artifactId>pebble</artifactId>
                 <version>${pebble.version}</version>
+            </dependency>
+
+            <!-- ==================== 【本地修复】victools JSON Schema 版本锁定 ==================== -->
+            <!-- dashscope-sdk-java 2.22.2 传递依赖 jsonschema-generator 4.31.1，而 Spring AI 1.1.8
+                 （spring-ai-model / openai / anthropic / mcp-annotations）需要 4.38.0。Maven 按
+                 "最先声明者优先"选中了 4.31.1，导致启动时 GoalEvaluationService 报
+                 NoClassDefFoundError: com/github/victools/jsonschema/generator/AnnotationHelper，
+                 整个应用上下文无法加载。此处统一锁定为 Spring AI 所需版本。
+                 合并上游时：若上游已自行锁定或升级 dashscope-sdk-java 解决该冲突，可删除本段；
+                 升级 spring-ai.version 时请同步核对 victools-jsonschema.version
+                 （mvn dependency:tree -Dincludes=com.github.victools）。 -->
+            <dependency>
+                <groupId>com.github.victools</groupId>
+                <artifactId>jsonschema-generator</artifactId>
+                <version>${victools-jsonschema.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.victools</groupId>
+                <artifactId>jsonschema-module-jackson</artifactId>
+                <version>${victools-jsonschema.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.victools</groupId>
+                <artifactId>jsonschema-module-swagger-2</artifactId>
+                <version>${victools-jsonschema.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
